@@ -528,8 +528,17 @@ async function refresh(){
 // Authenticated fetches. A 401 means the server requires MERIDIAN_API_KEY
 // and the browser isn't sending it (or it's wrong) — flag locked so the
 // page renders the unlock card instead of undefined metrics.
+//
+// window.meridianApiFetch lives in the shared header script, which is
+// appended AFTER this script in the page — so the first refresh() runs
+// before it exists. Fall back to bare fetch until the header loads; the
+// 10s poll and every click handler run long after, on the real helper.
+function apiFetch(url,opts){
+  return (window.meridianApiFetch||fetch)(url,opts);
+}
+function storedKey(){return window.meridianApiKey?window.meridianApiKey():''}
 function apiGet(url){
-  return window.meridianApiFetch(url).then(function(r){
+  return apiFetch(url).then(function(r){
     if(r.status===401){var e=new Error('unauthorized');e.locked=true;throw e}
     return r.json();
   });
@@ -537,7 +546,7 @@ function apiGet(url){
 function apiPost(url,body,headers){
   var h={'Content-Type':'application/json'};
   if(headers){for(var k in headers)h[k]=headers[k]}
-  return window.meridianApiFetch(url,{method:'POST',headers:h,body:JSON.stringify(body)}).then(function(r){
+  return apiFetch(url,{method:'POST',headers:h,body:JSON.stringify(body)}).then(function(r){
     if(r.status===401){var e=new Error('unauthorized');e.locked=true;throw e}
     return r.json().then(function(data){return {status:r.status,data:data}});
   });
@@ -648,7 +657,7 @@ function render(h,s,q,pl){
   var refocusId=meridianReorder.focusAnchor();
   let o='';
   if(keyLocked)o+=unlockCard();
-  else if(window.meridianApiKey())o+='<div style="text-align:right;margin-bottom:12px"><button type="button" class="forget-key" data-action="forget">dashboard key set · forget</button></div>';
+  else if(storedKey())o+='<div style="text-align:right;margin-bottom:12px"><button type="button" class="forget-key" data-action="forget">dashboard key set · forget</button></div>';
   o+=introSection(h);
 
   // Accounts — per-profile usage + est cost; click a card to switch.
@@ -702,7 +711,7 @@ function unlockDashboard(){
   var input=document.getElementById('api-key-input');
   var key=input?input.value.trim():'';
   if(!key){unlockError='Enter the server API key to unlock.';if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
-  window.meridianSetApiKey(key);
+  if(window.meridianSetApiKey)window.meridianSetApiKey(key);
   unlockError=null;keyLocked=false;
   refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();
 }
@@ -710,7 +719,7 @@ function unlockDashboard(){
 function startLogin(id){
   loginState={profile:id,busy:true,error:null,authorizeUrl:null,state:null};
   if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);
-  window.meridianApiFetch('/auth/claude/start?profile='+encodeURIComponent(id))
+  apiFetch('/auth/claude/start?profile='+encodeURIComponent(id))
     .then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})})
     .then(function(res){
       if(res.status===200&&res.d.authorizeUrl){
@@ -822,7 +831,7 @@ function handleAction(el){
   var action=el.dataset.action;
   var profile=el.dataset.profile;
   if(action==='unlock'){unlockDashboard();return}
-  if(action==='forget'){window.meridianSetApiKey('');keyLocked=false;refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();return}
+  if(action==='forget'){if(window.meridianSetApiKey)window.meridianSetApiKey('');keyLocked=false;refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();return}
   if(action==='login'&&profile){startLogin(profile);return}
   if(action==='login-complete'){completeLogin();return}
   if(action==='login-cancel'){loginState=null;refresh();return}
