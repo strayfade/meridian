@@ -6,6 +6,13 @@
  * 24h traffic strip. Site chrome (logo, nav, status) lives in the shared
  * header from profileBar.ts. Fetches /health, /telemetry/summary,
  * /v1/usage/quota/all, /profiles/list and /settings/api/routing client-side for live data.
+ *
+ * Authenticated fetches go through window.meridianApiFetch (the tab-scoped
+ * dashboard key from profileBar.ts); a 401 renders the unlock card instead
+ * of undefined metrics. Account cards carry management controls — web OAuth
+ * login (/auth/claude/start + /auth/claude/exchange), token refresh
+ * (/auth/refresh), rename, remove, and add (claude-max or --oauth-token) —
+ * so a dead account is fixed where it is reported.
  */
 
 import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "./profileBar"
@@ -152,6 +159,7 @@ export const landingHtml = `<!DOCTYPE html>
   .section-head { display: flex; align-items: baseline; justify-content: space-between;
     gap: 12px; margin-bottom: 12px; }
   .section-head .section-title { margin-bottom: 0; }
+  .section-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
   .sort-tabs { display: flex; gap: 2px; flex-shrink: 0; }
   .sort-tab { background: none; border: none; border-bottom: 2px solid transparent;
     color: var(--muted); font-family: inherit; font-size: 11px; font-weight: 500;
@@ -163,6 +171,46 @@ export const landingHtml = `<!DOCTYPE html>
   .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border);
     font-size: 11px; color: var(--muted); text-align: center; }
   .footer a { color: var(--accent); text-decoration: none; }
+
+  /* Account controls — card action rows, unlock card, login panel, add form.
+     Buttons follow the shared vocabulary: surface2 fill, accent text, hover
+     is a blue tint. Destructive actions earn red the same way pills do. */
+  .card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+    padding-top: 12px; border-top: 1px solid var(--border); }
+  .btn { background: var(--surface2); border: 1px solid var(--accent); color: var(--accent);
+    font-family: inherit; font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+    border-radius: 8px; padding: 5px 12px; cursor: pointer; transition: background 0.15s; }
+  .btn:hover { background: rgba(88,166,255,0.12); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn-danger { border-color: rgba(248,81,73,0.35); color: var(--red); }
+  .btn-danger:hover { background: rgba(248,81,73,0.12); }
+  .btn-quiet { border-color: var(--border); color: var(--muted); }
+  .btn-quiet:hover { color: var(--text); background: var(--surface2); }
+  .text-input { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    font-family: inherit; font-size: 12px; border-radius: 8px; padding: 6px 10px; }
+  .text-input:focus { outline: none; border-color: var(--accent); }
+  .text-input.mono { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; }
+  .panel-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 24px; }
+  .panel-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .panel-card p { font-size: 12px; color: var(--muted); margin-bottom: 10px; max-width: 640px; }
+  .panel-card a { color: var(--accent); text-decoration: none; }
+  .panel-card a:hover { text-decoration: underline; }
+  .panel-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .panel-row .text-input { flex: 1; min-width: 200px; }
+  .login-steps { font-size: 12px; color: var(--muted); margin: 0 0 10px 18px; }
+  .login-steps li { margin-bottom: 4px; }
+  .inline-err { font-size: 12px; color: var(--red); margin-top: 8px; }
+  .inline-ok { font-size: 12px; color: var(--green); margin-top: 8px; }
+  .notice-bar { font-size: 12px; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; }
+  .notice-bar.ok { color: var(--green); background: rgba(63,185,80,0.1);
+    border: 1px solid rgba(63,185,80,0.35); }
+  .notice-bar.err { color: var(--red); background: rgba(248,81,73,0.1);
+    border: 1px solid rgba(248,81,73,0.35); }
+  .forget-key { background: none; border: none; color: var(--muted); font-family: inherit;
+    font-size: 11px; cursor: pointer; padding: 2px 4px; }
+  .forget-key:hover { color: var(--text); text-decoration: underline; }
 ` + profileBarCss + `
 </style>
 </head>
@@ -432,11 +480,12 @@ function profileSection(q,s,pl,h){
       +'<div class="profile-head"><span class="profile-name">'+(draggable?meridianReorder.handleHtml(p.id,pos,profs.length):'')+'<span class="prof-dot"></span>'+(p.entry?infoIcon(p.entry,p.type):'')+''+esc(p.label||p.id)+' '+badge+'</span>'
       +'<span class="profile-cost">'+usd(cost?cost.estimatedUsd:0)+'</span></div>'
       +'<div class="profile-sub">'+(cost?cost.requests+' request'+(cost.requests===1?'':'s')+' · est. API value · 24h':'no traffic · 24h')+'</div>'
-      +spentBanner+rows+'</div>';
+      +spentBanner+rows+cardActions(p,spend)+'</div>';
     if(p.configured)pos++;
   }
   if(!cards)return '';
-  return '<div class="section"><div class="section-head"><div class="section-title">'+(profs.length===1?'Account':'Accounts')+'</div>'+sortTabs(profs.length)+'</div>'
+  return '<div class="section"><div class="section-head"><div class="section-title">'+(profs.length===1?'Account':'Accounts')+'</div>'
+    +'<div class="section-actions">'+sortTabs(profs.length)+'<button type="button" class="btn" data-action="add">Add account</button></div></div>'
     +(multi?meridianReorder.noteHtml(reorderable):'')
     +'<div class="profile-grid">'+cards+'</div></div>';
 }
@@ -449,42 +498,188 @@ function strip(items){
   return o+'</div>';
 }
 
+// Dashboard account management state. Notices are transient (dropped after
+// 30s in render); the login/add/rename forms hold their own input, so the
+// 10s auto-refresh pauses while any of them is open.
+var keyLocked=false;
+var unlockError=null;
+var notice=null;
+var loginState=null;
+var adding=false;
+var addMode='claude';
+var addError=null;
+var renaming=null;
+var confirmingRemove=null;
+
 async function refresh(){
   try{
     const [health,stats,quota,profiles,routing]=await Promise.all([
       fetch('/health').then(r=>r.json()),
-      fetch('/telemetry/summary?window=86400000').then(r=>r.json()),
-      fetch('/v1/usage/quota/all').then(r=>r.json()).catch(function(){return null}),
-      fetch('/profiles/list').then(r=>r.json()).catch(function(){return null}),
-      fetch('/settings/api/routing').then(r=>r.json()).catch(function(){return null})
+      apiGet('/telemetry/summary?window=86400000').catch(markLocked),
+      apiGet('/v1/usage/quota/all').catch(markLocked),
+      apiGet('/profiles/list').catch(markLocked),
+      apiGet('/settings/api/routing').catch(markLocked)
     ]);
     meridianReorder.adopt(routing);
     render(health,stats,quota,profiles);
   }catch(e){document.getElementById('content').innerHTML='<div style="color:var(--red);padding:40px;text-align:center">Could not connect</div>'}
 }
 
+// Authenticated fetches. A 401 means the server requires MERIDIAN_API_KEY
+// and the browser isn't sending it (or it's wrong) — flag locked so the
+// page renders the unlock card instead of undefined metrics.
+function apiGet(url){
+  return window.meridianApiFetch(url).then(function(r){
+    if(r.status===401){var e=new Error('unauthorized');e.locked=true;throw e}
+    return r.json();
+  });
+}
+function apiPost(url,body,headers){
+  var h={'Content-Type':'application/json'};
+  if(headers){for(var k in headers)h[k]=headers[k]}
+  return window.meridianApiFetch(url,{method:'POST',headers:h,body:JSON.stringify(body)}).then(function(r){
+    if(r.status===401){var e=new Error('unauthorized');e.locked=true;throw e}
+    return r.json().then(function(data){return {status:r.status,data:data}});
+  });
+}
+// A mutation that 401s unlocks nothing — it reveals the lock. Anything else
+// becomes a transient notice under the accounts section.
+function opFailed(e,fallback){
+  if(e&&e.locked){keyLocked=true}
+  else{notice={type:'err',text:fallback,at:Date.now()}}
+  if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);
+}
+
+function markLocked(e){if(e&&e.locked)keyLocked=true;return null}
+
 function tokens(v){if(v==null)return '—';if(v>=1e6)return (v/1e6).toFixed(1)+'M';if(v>=1e3)return (v/1e3).toFixed(1)+'k';return String(v)}
+
+// The API-key unlock card. Shown whenever an authenticated fetch 401s: the
+// server has MERIDIAN_API_KEY set and the browser sent none (or a wrong
+// one). The key lives in sessionStorage — this tab only, never on disk.
+function unlockCard(){
+  return '<div class="panel-card"><h3>Dashboard locked</h3>'
+    +'<p>This server requires its API key (<code>MERIDIAN_API_KEY</code> from the server environment). Enter it once to unlock accounts, usage and controls in this tab.</p>'
+    +'<div class="panel-row"><input type="password" id="api-key-input" class="text-input mono" placeholder="API key" autocomplete="off">'
+    +'<button type="button" class="btn" data-action="unlock">Unlock</button></div>'
+    +(unlockError?'<div class="inline-err">'+esc(unlockError)+'</div>':'')
+    +'</div>';
+}
+
+function noticeHtml(){
+  if(!notice||Date.now()-notice.at>30000)return '';
+  return '<div class="notice-bar '+notice.type+'">'+esc(notice.text)+'</div>';
+}
+
+// Per-card account controls. Clicks here must not switch the profile, so the
+// content click/keydown handlers bail out on [data-action] (same opt-out the
+// info icon already has).
+function cardActions(p,spend){
+  var o='<div class="card-actions">';
+  if(spend.reason==='unusable'){
+    o+='<button type="button" class="btn" data-action="login" data-profile="'+esc(p.id)+'">Log in</button>';
+  }else if(p.type==='claude-max'||!p.type){
+    o+='<button type="button" class="btn btn-quiet" data-action="refresh-token" data-profile="'+esc(p.id)+'">Refresh token</button>';
+  }
+  if(renaming===p.id){
+    o+='<input id="rename-input" class="text-input" value="'+esc(p.id)+'" maxlength="64">'
+      +'<button type="button" class="btn" data-action="rename-save" data-profile="'+esc(p.id)+'">Save</button>'
+      +'<button type="button" class="btn btn-quiet" data-action="rename-cancel">Cancel</button>';
+  }else{
+    o+='<button type="button" class="btn btn-quiet" data-action="rename" data-profile="'+esc(p.id)+'">Rename</button>';
+  }
+  if(confirmingRemove===p.id){
+    o+='<button type="button" class="btn btn-danger" data-action="remove-confirm" data-profile="'+esc(p.id)+'">Confirm remove</button>'
+      +'<button type="button" class="btn btn-quiet" data-action="remove-cancel">Keep</button>';
+  }else{
+    o+='<button type="button" class="btn btn-quiet" data-action="remove" data-profile="'+esc(p.id)+'">Remove</button>';
+  }
+  return o+'</div>';
+}
+
+// The OAuth login panel: step 1 opens the Claude authorize link (started
+// server-side, PKCE verifier held there for 10 minutes), step 2 pastes the
+// code back for POST /auth/claude/exchange.
+function loginPanel(){
+  if(!loginState)return '';
+  var o='<div class="panel-card"><h3>Log in — '+esc(loginState.profile)+'</h3>';
+  if(loginState.busy&&!loginState.authorizeUrl){
+    o+='<p>Starting login…</p></div>';
+    return o;
+  }
+  if(!loginState.authorizeUrl){
+    o+='<div class="inline-err">'+esc(loginState.error||'Login could not start.')+'</div>'
+      +'<div class="panel-row" style="margin-top:10px"><button type="button" class="btn btn-quiet" data-action="login-cancel">Close</button></div></div>';
+    return o;
+  }
+  o+='<ol class="login-steps"><li>Open the Claude login link (sign into the <strong>'+esc(loginState.profile)+'</strong> account in that browser tab):<br>'
+    +'<a href="'+esc(loginState.authorizeUrl)+'" target="_blank" rel="noopener">Open Claude login</a></li>'
+    +'<li>Paste the code Claude shows below and complete the login.</li></ol>'
+    +'<div class="panel-row"><input id="login-code" class="text-input mono" placeholder="Paste code or callback URL" autocomplete="off">'
+    +'<button type="button" class="btn" data-action="login-complete"'+(loginState.busy?' disabled':'')+'>'
+    +(loginState.busy?'Working…':'Complete login')+'</button>'
+    +'<button type="button" class="btn btn-quiet" data-action="login-cancel">Cancel</button></div>'
+    +(loginState.error?'<div class="inline-err">'+esc(loginState.error)+'</div>':'')
+    +'</div>';
+  return o;
+}
+
+// The add-account form: a Claude browser login, or a "claude setup-token"
+// value for headless/CI profiles.
+function addPanel(){
+  if(!adding)return '';
+  var o='<div class="panel-card"><h3>Add account</h3>'
+    +'<div class="panel-row" style="margin-bottom:10px">'
+    +'<button type="button" class="btn'+(addMode==='claude'?'':' btn-quiet')+'" data-action="add-mode" data-mode="claude">Claude login</button>'
+    +'<button type="button" class="btn'+(addMode==='token'?'':' btn-quiet')+'" data-action="add-mode" data-mode="token">OAuth token</button></div>'
+    +'<div class="panel-row"><input id="add-id" class="text-input" placeholder="Account name (letters, numbers, - _)">'
+    +(addMode==='token'?'<input id="add-token" type="password" class="text-input mono" placeholder="claude setup-token value" autocomplete="off">':'')
+    +'<button type="button" class="btn" data-action="add-save">Add'+(addMode==='claude'?' &amp; log in':'')+'</button>'
+    +'<button type="button" class="btn btn-quiet" data-action="add-cancel">Cancel</button></div>'
+    +(addMode==='token'?'<p style="margin-top:8px">Generate the value with <code>claude setup-token</code> on a machine signed into that account.</p>':'')
+    +(addError?'<div class="inline-err">'+esc(addError)+'</div>':'')
+    +'</div>';
+  return o;
+}
 
 function render(h,s,q,pl){
   lastData=[h,s,q,pl];
+  s=s||{};
   var refocusId=meridianReorder.focusAnchor();
   let o='';
+  if(keyLocked)o+=unlockCard();
+  else if(window.meridianApiKey())o+='<div style="text-align:right;margin-bottom:12px"><button type="button" class="forget-key" data-action="forget">dashboard key set · forget</button></div>';
   o+=introSection(h);
 
-  // Accounts — per-profile usage + est cost; click a card to switch
-  o+=profileSection(q,s,pl,h);
+  // Accounts — per-profile usage + est cost; click a card to switch.
+  // Management (login, refresh, rename, remove, add) lives here too, so a
+  // dead account is fixed where it is reported instead of in a terminal.
+  o+=noticeHtml();
+  o+=loginPanel();
+  o+=addPanel();
+  var accounts=profileSection(q,s,pl,h);
+  if(!accounts&&!keyLocked){
+    accounts='<div class="section"><div class="section-head"><div class="section-title">Accounts</div>'
+      +'<div><button type="button" class="btn" data-action="add">Add account</button></div></div>'
+      +'<div class="panel-card"><p>No accounts yet. Add one to route requests through your Claude subscription.</p></div></div>';
+  }
+  o+=accounts;
 
   // Last 24 hours — meaningful signals only. Errors and envelope
   // violations appear only when there is something to report.
   var tu=s.tokenUsage||{};
   var cache=tu.avgCacheHitRate!=null?Math.round(tu.avgCacheHitRate*100)+'%':'—';
+  // Null-safe: with the dashboard locked the summary never arrives, and the
+  // strip must read "locked", not "undefined" or a crash.
+  var reqTotal=s.totalRequests==null?'—':String(s.totalRequests);
+  var errLine=s.errorCount>0?s.errorCount+' error'+(s.errorCount===1?'':'s'):(s.totalRequests==null?'locked':'no errors');
   var items=[\n    // The big number is the TOTAL — never error-colored (a red 1714 reads as
     // 1714 failures). The error signal lives on the detail line only.
-    ['Requests',String(s.totalRequests),'',s.errorCount>0?s.errorCount+' error'+(s.errorCount===1?'':'s'):'no errors',s.errorCount>0?'red':''],
+    ['Requests',reqTotal,'',errLine,s.errorCount>0?'red':''],
     ['Tokens Out',tokens(tu.totalOutputTokens),'',tokens(tu.totalInputTokens)+' in'],
     ['Cache Hit',cache,tu.avgCacheHitRate>=0.5?'green':'','prompt cache'],
-    ['Est. API Value',usd(s.costEstimate?.totalUsd),'','list prices'],
-    ['Median Response',ms(s.totalDuration?.p50),'','p95 '+ms(s.totalDuration?.p95)]
+    ['Est. API Value',usd(s.costEstimate&&s.costEstimate.totalUsd),'','list prices'],
+    ['Median Response',ms(s.totalDuration&&s.totalDuration.p50),'','p95 '+ms(s.totalDuration&&s.totalDuration.p95)]
   ];
   if(s.envelopeViolationCount>0)items.push(['Envelope',String(s.envelopeViolationCount),'red','wire-contract violations']);
   o+='<div class="section"><div class="section-title">Last 24 Hours</div>'+strip(items)+'</div>';
@@ -495,16 +690,161 @@ function render(h,s,q,pl){
 }
 
 function switchProfile(id){
-  fetch('/profiles/active',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:id})})
-    .then(function(r){return r.json()})
-    .then(function(data){if(data.success){refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh()}else if(data.error)alert(data.error)})
-    .catch(function(){});
+  apiPost('/profiles/active',{profile:id})
+    .then(function(res){
+      if(res.data&&res.data.success){refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh()}
+      else{notice={type:'err',text:(res.data&&(res.data.error||res.data.message))||'Switch failed',at:Date.now()};if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3])}
+    })
+    .catch(function(e){opFailed(e,'Could not reach the server')});
+}
+
+function unlockDashboard(){
+  var input=document.getElementById('api-key-input');
+  var key=input?input.value.trim():'';
+  if(!key){unlockError='Enter the server API key to unlock.';if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  window.meridianSetApiKey(key);
+  unlockError=null;keyLocked=false;
+  refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();
+}
+
+function startLogin(id){
+  loginState={profile:id,busy:true,error:null,authorizeUrl:null,state:null};
+  if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);
+  window.meridianApiFetch('/auth/claude/start?profile='+encodeURIComponent(id))
+    .then(function(r){return r.json().then(function(d){return {status:r.status,d:d}})})
+    .then(function(res){
+      if(res.status===200&&res.d.authorizeUrl){
+        loginState={profile:id,authorizeUrl:res.d.authorizeUrl,state:res.d.state,busy:false,error:null};
+      }else{
+        loginState={profile:id,busy:false,error:(res.d&&res.d.error&&res.d.error.message)||'Login could not start.',authorizeUrl:null,state:null};
+      }
+      if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);
+    })
+    .catch(function(e){
+      if(e&&e.locked){keyLocked=true;loginState=null}
+      else{loginState={profile:id,busy:false,error:'Could not reach the server.',authorizeUrl:null,state:null}}
+      if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);
+    });
+}
+
+function completeLogin(){
+  if(!loginState||loginState.busy)return;
+  var input=document.getElementById('login-code');
+  var code=input?input.value:'';
+  if(!code.trim()){loginState.error='Paste the code Claude shows after sign-in.';if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  loginState.busy=true;loginState.error=null;
+  if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);
+  apiPost('/auth/claude/exchange',{profile:loginState.profile,code:code,state:loginState.state})
+    .then(function(res){
+      if(res.status===200&&res.data&&res.data.success){
+        notice={type:'ok',text:'Account "'+loginState.profile+'" logged in.',at:Date.now()};
+        loginState=null;refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();
+      }else{
+        loginState.error=(res.data&&res.data.error&&res.data.error.message)||'Login failed.';
+        loginState.busy=false;
+        if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);
+      }
+    })
+    .catch(function(e){
+      if(e&&e.locked){keyLocked=true;loginState=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3])}
+      else{loginState.error='Could not reach the server.';loginState.busy=false;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3])}
+    });
+}
+
+function refreshToken(id){
+  apiPost('/auth/refresh',{}, {'x-meridian-profile':id})
+    .then(function(res){
+      if(res.data&&res.data.success){notice={type:'ok',text:'Token refreshed for "'+id+'".',at:Date.now()}}
+      else{notice={type:'err',text:(res.data&&(res.data.message||res.data.error))||'Refresh failed — the account may need a fresh login.',at:Date.now()}}
+      refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();
+    })
+    .catch(function(e){opFailed(e,'Could not reach the server')});
+}
+
+function saveRename(id){
+  var input=document.getElementById('rename-input');
+  var to=input?input.value.trim():'';
+  if(!to||to===id){renaming=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  apiPost('/profiles/rename',{from:id,to:to})
+    .then(function(res){
+      renaming=null;
+      if(res.data&&res.data.success){notice={type:'ok',text:'Renamed "'+id+'" to "'+to+'".',at:Date.now()}}
+      else{notice={type:'err',text:(res.data&&res.data.error)||'Rename failed.',at:Date.now()}}
+      refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();
+    })
+    .catch(function(e){renaming=null;opFailed(e,'Could not reach the server')});
+}
+
+function confirmRemove(id){
+  apiPost('/profiles/remove',{id:id})
+    .then(function(res){
+      confirmingRemove=null;
+      if(res.data&&res.data.success){notice={type:'ok',text:'Account "'+id+'" removed.',at:Date.now()}}
+      else{notice={type:'err',text:(res.data&&res.data.error)||'Remove failed.',at:Date.now()}}
+      refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();
+    })
+    .catch(function(e){confirmingRemove=null;opFailed(e,'Could not reach the server')});
+}
+
+function saveAdd(){
+  var idInput=document.getElementById('add-id');
+  var id=idInput?idInput.value.trim():'';
+  if(!id){addError='Enter a name for the account.';if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  if(addMode==='token'){
+    var tokenInput=document.getElementById('add-token');
+    var token=tokenInput?tokenInput.value:'';
+    if(!token.trim()){addError='Paste the "claude setup-token" value.';if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+    apiPost('/profiles/add-oauth-token',{id:id,token:token})
+      .then(function(res){
+        if(res.data&&res.data.success){
+          adding=false;addError=null;
+          notice={type:'ok',text:'Account "'+id+'" added.',at:Date.now()};
+          refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();
+        }else{addError=(res.data&&res.data.error)||'Add failed.';if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3])}
+      })
+      .catch(function(e){opFailed(e,'Could not reach the server')});
+    return;
+  }
+  apiPost('/profiles/add',{id:id})
+    .then(function(res){
+      if(res.data&&res.data.success){
+        adding=false;addError=null;
+        notice={type:'ok',text:'Account "'+id+'" added — complete its login below.',at:Date.now()};
+        refresh();startLogin(id);
+      }else{addError=(res.data&&res.data.error)||'Add failed.';if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3])}
+    })
+    .catch(function(e){opFailed(e,'Could not reach the server')});
+}
+
+// Every management button routes through here. Action controls opt out of
+// the card-as-switch-button, so this runs before any card logic below.
+function handleAction(el){
+  var action=el.dataset.action;
+  var profile=el.dataset.profile;
+  if(action==='unlock'){unlockDashboard();return}
+  if(action==='forget'){window.meridianSetApiKey('');keyLocked=false;refresh();if(window.meridianHeaderRefresh)window.meridianHeaderRefresh();return}
+  if(action==='login'&&profile){startLogin(profile);return}
+  if(action==='login-complete'){completeLogin();return}
+  if(action==='login-cancel'){loginState=null;refresh();return}
+  if(action==='refresh-token'&&profile){refreshToken(profile);return}
+  if(action==='rename'&&profile){renaming=profile;confirmingRemove=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  if(action==='rename-save'&&profile){saveRename(profile);return}
+  if(action==='rename-cancel'){renaming=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  if(action==='remove'&&profile){confirmingRemove=profile;renaming=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  if(action==='remove-confirm'&&profile){confirmRemove(profile);return}
+  if(action==='remove-cancel'){confirmingRemove=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  if(action==='add'){adding=true;addError=null;loginState=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  if(action==='add-mode'){addMode=el.dataset.mode==='token'?'token':'claude';addError=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
+  if(action==='add-save'){saveAdd();return}
+  if(action==='add-cancel'){adding=false;addError=null;if(lastData)render(lastData[0],lastData[1],lastData[2],lastData[3]);return}
 }
 // The handle sits inside a card that is itself a switch button, so without
 // this every grab of the handle would also change the active account.
 function onHandle(e){return !!(e.target.closest&&e.target.closest('.drag-handle'))}
 document.getElementById('content').addEventListener('click',function(e){
   if(onHandle(e))return;
+  var act=e.target.closest('[data-action]');
+  if(act){handleAction(act);return}
   // The card is itself the switch button, so the icon inside one has to opt
   // out of it or reading an account would move all traffic to that account.
   if(e.target.closest('.prof-info'))return;
@@ -514,8 +854,20 @@ document.getElementById('content').addEventListener('click',function(e){
   if(card&&card.dataset.profile)switchProfile(card.dataset.profile);
 });
 document.getElementById('content').addEventListener('keydown',function(e){
+  // Typing in a control is never a card action; Enter submits the open form.
+  if(e.target.closest('input,textarea')){
+    if(e.key==='Enter'){
+      var id=e.target.id;
+      if(id==='login-code')completeLogin();
+      else if(id==='api-key-input')unlockDashboard();
+      else if(id==='add-id')saveAdd();
+      else if(id==='rename-input'){var btn=e.target.closest('.card-actions');var save=btn?btn.querySelector('[data-action="rename-save"]'):null;if(save)saveRename(save.dataset.profile)}
+    }
+    return;
+  }
   if(e.key!=='Enter'&&e.key!==' ')return;
   if(onHandle(e))return;
+  if(e.target.closest('[data-action]'))return;
   if(e.target.closest('.prof-info'))return;
   var card=e.target.closest('.profile-card.switchable');
   if(card&&card.dataset.profile){e.preventDefault();switchProfile(card.dataset.profile)}
@@ -523,7 +875,9 @@ document.getElementById('content').addEventListener('keydown',function(e){
 viewSort=readStoredSort()||viewSort;
 meridianReorder.init({onSaved:refresh});
 refresh();
-setInterval(function(){if(!meridianReorder.dragging() && !infoPopOpen())refresh()},10000);
+// A form holding typed input must not be wiped by the poll — same reason the
+// drag and the info popover already pause it.
+setInterval(function(){if(!meridianReorder.dragging() && !infoPopOpen() && !loginState && !adding && !renaming)refresh()},10000);
 ` + profileBarJs + `
 </script>
 </body>

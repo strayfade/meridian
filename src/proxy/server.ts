@@ -101,6 +101,7 @@ import { getAdapterTransforms } from "./transforms/registry"
 import { loadPlugins, getActiveTransforms } from "./plugins/loader"
 import type { LoadedPlugin } from "./plugins/types"
 import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, resolveActiveProfileId, getEffectiveProfiles, restoreActiveProfile, invalidateDiskProfileCache, shareableCredentialDir, type ResolvedProfile } from "./profiles" 
+import { createProfileWebLogin, addWebProfile, addWebOAuthTokenProfile, removeWebProfile } from "./profileWeb"
 import { followStatus, startFollowPolling, stopFollowPolling, logFollowBanner, FOLLOW_POLL_INTERVAL_MS } from "./followActive"
 import { organizationNames, organizationNeedsRefresh, refreshOrganizationNameSoon } from "./organizationName"
 import {
@@ -1476,7 +1477,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         status: "ok",
         service: "meridian",
         format: "anthropic",
-        endpoints: ["/v1/messages", "/messages", "/v1/chat/completions", "/v1/responses", "/v1/models", "/v1/sessions/:key/cancel", "/v1/design/*", "/design-login", "/telemetry", "/metrics", "/health"]
+        endpoints: ["/v1/messages", "/messages", "/v1/chat/completions", "/v1/responses", "/v1/models", "/v1/sessions/:key/cancel", "/v1/design/*", "/design-login", "/auth/claude/start", "/auth/claude/exchange", "/telemetry", "/metrics", "/health"]
       })
     }
     return c.html(landingHtml)
@@ -8425,6 +8426,150 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     })
     plog(`[PROXY] Profile renamed: ${result.from} -> ${result.to} (still answers to: ${result.aliases.join(", ")})`)
     return c.json({ success: true, from: result.from, to: result.to, aliases: result.aliases })
+  })
+
+  // --- Web profile management (dashboard) ---
+  // Browser equivalents of `meridian profile add|login|remove`: the dashboard
+  // starts a PKCE login (link shown to the user), completes it with a pasted
+  // code, and adds/removes profile entries on disk. All logic lives in
+  // ./profileWeb; these routes only wire HTTP. They sit under the /profiles/*
+  // and /auth/* prefixes, so requireAuth gates them whenever MERIDIAN_API_KEY
+  // is set — starting or completing a login writes credentials, which must
+  // never be reachable without the API key.
+  const profileWebLogin = createProfileWebLogin({})
+
+  app.get("/auth/claude/start", (c) => {
+    const id = c.req.query("profile")
+    if (!id) {
+      return c.json({ type: "error", error: { type: "invalid_request", message: "Missing 'profile' query parameter." } }, 400)
+    }
+    const effective = getEffectiveProfiles(finalConfig.profiles)
+    if (!effective.some(p => p.id === id)) {
+      return c.json({ type: "error", error: { type: "not_found", message: `Unknown profile: ${id}. Available: ${effective.map(p => p.id).join(", ") || "none"}` } }, 404)
+    }
+    const resolved = resolveProfile(finalConfig.profiles, finalConfig.defaultProfile, id)
+    const result = profileWebLogin.start({ id: resolved.id, type: resolved.type, claudeConfigDir: resolved.env.CLAUDE_CONFIG_DIR })
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
+      headers: { "content-type": "application/json" },
+    })
+  })
+
+  app.post("/auth/claude/exchange", async (c) => {
+    let body: unknown
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ type: "error", error: { type: "invalid_request", message: "Request body must be JSON with 'profile' and 'code' fields." } }, 400)
+    }
+    const result = await profileWebLogin.exchange(body)
+    if (result.status === 200) {
+      const profileId = (result.body as { profile?: string }).profile
+      if (profileId) {
+        // Drop this profile's rate-limit snapshot — its quotas were observed
+        // under the previous credential. Same rationale as POST /auth/refresh.
+        rateLimitStore.clear(profileId)
+        plog(`[PROXY] Profile authenticated via web login: ${profileId}`)
+      }
+    }
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
+      headers: { "content-type": "application/json" },
+    })
+  })
+
+  app.post("/profiles/add", async (c) => {
+    let body: { id?: string }
+    try {
+      body = await c.req.json() as { id?: string }
+    } catch {
+      return c.json({ error: "Invalid JSON in request body" }, 400)
+    }
+    if (!body.id) {
+      return c.json({ error: "Missing 'id' in request body" }, 400)
+    }
+    if (envBool("CREDENTIALS_READONLY")) {
+      return c.json({ error: "MERIDIAN_CREDENTIALS_READONLY=1 — this instance may not modify credentials." }, 403)
+    }
+    const result = addWebProfile(body.id)
+    if (!result.ok) {
+      return c.json({ error: result.error }, 400)
+    }
+    // The profile is on disk now; drop the TTL cache so the caller's very
+    // next /profiles/list shows it instead of its own stale list.
+    invalidateDiskProfileCache()
+    claudeLog("profile.added", {
+      id: result.profile?.id,
+      via: "web",
+      userAgent: c.req.header("user-agent")?.slice(0, 120) ?? null,
+      origin: c.req.header("origin") ?? c.req.header("referer")?.slice(0, 120) ?? null,
+    })
+    plog(`[PROXY] Profile added via web: ${result.profile?.id} (log in to link its account)`)
+    return c.json({ success: true, profile: result.profile })
+  })
+
+  app.post("/profiles/add-oauth-token", async (c) => {
+    let body: { id?: string; token?: string }
+    try {
+      body = await c.req.json() as { id?: string; token?: string }
+    } catch {
+      return c.json({ error: "Invalid JSON in request body" }, 400)
+    }
+    if (!body.id || !body.token) {
+      return c.json({ error: "Missing 'id' or 'token' in request body" }, 400)
+    }
+    if (envBool("CREDENTIALS_READONLY")) {
+      return c.json({ error: "MERIDIAN_CREDENTIALS_READONLY=1 — this instance may not modify credentials." }, 403)
+    }
+    const result = addWebOAuthTokenProfile(body.id, body.token)
+    if (!result.ok) {
+      return c.json({ error: result.error }, 400)
+    }
+    invalidateDiskProfileCache()
+    claudeLog("profile.added", {
+      id: result.profile?.id,
+      via: "web-oauth-token",
+      userAgent: c.req.header("user-agent")?.slice(0, 120) ?? null,
+      origin: c.req.header("origin") ?? c.req.header("referer")?.slice(0, 120) ?? null,
+    })
+    plog(`[PROXY] OAuth-token profile added via web: ${result.profile?.id}`)
+    return c.json({ success: true, profile: result.profile })
+  })
+
+  app.post("/profiles/remove", async (c) => {
+    let body: { id?: string }
+    try {
+      body = await c.req.json() as { id?: string }
+    } catch {
+      return c.json({ error: "Invalid JSON in request body" }, 400)
+    }
+    if (!body.id) {
+      return c.json({ error: "Missing 'id' in request body" }, 400)
+    }
+    if (envBool("CREDENTIALS_READONLY")) {
+      return c.json({ error: "MERIDIAN_CREDENTIALS_READONLY=1 — this instance may not modify credentials." }, 403)
+    }
+    const before = getEffectiveProfiles(finalConfig.profiles).map(p => p.id)
+    const result = removeWebProfile(body.id)
+    if (!result.ok) {
+      return c.json({ error: result.error }, 400)
+    }
+    invalidateDiskProfileCache()
+    // A removed active profile must not stay the pointer: move it to the
+    // first surviving profile so traffic keeps serving instead of falling
+    // back to an unrelated default. With none left there is nothing to move.
+    const remaining = before.filter(id => id !== body.id)
+    if (getActiveProfileId() === body.id && remaining.length > 0) {
+      setActiveProfile(remaining[0]!)
+    }
+    claudeLog("profile.removed", {
+      id: body.id,
+      via: "web",
+      userAgent: c.req.header("user-agent")?.slice(0, 120) ?? null,
+      origin: c.req.header("origin") ?? c.req.header("referer")?.slice(0, 120) ?? null,
+    })
+    plog(`[PROXY] Profile removed via web: ${body.id}`)
+    return c.json({ success: true, removed: body.id })
   })
 
   // --- Plugin management routes ---

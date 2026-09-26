@@ -210,6 +210,37 @@ export const profileBarJs = `
 
   function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+  // Dashboard API key. The server gates every data endpoint behind
+  // MERIDIAN_API_KEY when it is set, but a browser fetch carries no key —
+  // so an unlocked dashboard 401s everywhere. The key lives in
+  // sessionStorage (this tab only, never persisted to disk) and is attached
+  // as x-api-key by meridianApiFetch. Pages keep calling fetch() for public
+  // endpoints and use meridianApiFetch for the rest; the home page renders
+  // the unlock prompt that fills it.
+  var MERIDIAN_KEY_STORAGE = 'meridian.apiKey';
+  function meridianApiKey() {
+    try { return sessionStorage.getItem(MERIDIAN_KEY_STORAGE) || ''; }
+    catch (_) { return ''; }
+  }
+  function meridianSetApiKey(key) {
+    try {
+      if (key) sessionStorage.setItem(MERIDIAN_KEY_STORAGE, key);
+      else sessionStorage.removeItem(MERIDIAN_KEY_STORAGE);
+    } catch (_) { /* a lost key is not worth failing over */ }
+  }
+  function meridianApiFetch(url, init) {
+    var headers = {};
+    if (init && init.headers) { for (var k in init.headers) headers[k] = init.headers[k]; }
+    var key = meridianApiKey();
+    if (key) headers['x-api-key'] = key;
+    var opts = { headers: headers };
+    if (init) { for (var k2 in init) if (k2 !== 'headers') opts[k2] = init[k2]; }
+    return fetch(url, opts);
+  }
+  window.meridianApiKey = meridianApiKey;
+  window.meridianSetApiKey = meridianSetApiKey;
+  window.meridianApiFetch = meridianApiFetch;
+
   // Build provenance chip. Hidden entirely for a current npm install, which
   // is the case that needs no comment.
   function renderBuild(build) {
@@ -251,7 +282,7 @@ export const profileBarJs = `
       statusText.textContent = 'Offline';
     });
 
-    fetch('/profiles/list').then(function(r) { return r.json(); }).then(function(data) {
+    meridianApiFetch('/profiles/list').then(function(r) { return r.json(); }).then(function(data) {
       var current = (data.profiles || []).find(function(p) { return p.isActive; });
       if (!current) { profileChip.classList.remove('visible'); return; }
       // Follow mode: say so on every page. An instance quietly taking its

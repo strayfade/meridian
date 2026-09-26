@@ -189,6 +189,42 @@ describe("design-system conformance (DESIGN.md)", () => {
   })
 })
 
+describe("dashboard API-key helper (profileBarJs)", () => {
+  test("shared fetch wrapper attaches the tab-scoped key", () => {
+    expect(profileBarJs).toContain("meridianApiFetch")
+    expect(profileBarJs).toContain("meridian.apiKey")
+    expect(profileBarJs).toContain("sessionStorage")
+    expect(profileBarJs).toContain("x-api-key")
+  })
+
+  test("the header chip uses the wrapper so it works once unlocked", () => {
+    expect(profileBarJs).toContain("meridianApiFetch('/profiles/list')")
+  })
+})
+
+describe("landing account management", () => {
+  test("unlock card, login flow, and profile mutations are wired", () => {
+    expect(landingHtml).toContain("Dashboard locked")
+    expect(landingHtml).toContain("/auth/claude/start")
+    expect(landingHtml).toContain("/auth/claude/exchange")
+    expect(landingHtml).toContain("/auth/refresh")
+    expect(landingHtml).toContain("/profiles/add")
+    expect(landingHtml).toContain("/profiles/remove")
+    expect(landingHtml).toContain("/profiles/rename")
+    expect(landingHtml).toContain("Add account")
+  })
+
+  test("management buttons opt out of the card-as-switch-button", () => {
+    expect(landingHtml).toContain("[data-action]")
+    expect(landingHtml).toContain("handleAction")
+  })
+
+  test("a 401 renders the unlock card, not undefined metrics", () => {
+    expect(landingHtml).toContain("markLocked")
+    expect(landingHtml).toContain("keyLocked")
+  })
+})
+
 describe("per-page titles do not repeat the brand", () => {
   test("dashboard h1 is the page name, not the brand", () => {
     expect(dashboardHtml).not.toContain("<h1>Meridian</h1>")

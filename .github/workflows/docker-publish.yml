@@ -1,0 +1,63 @@
+name: Publish Docker image
+
+# Builds and pushes to ghcr.io/<owner>/<repo>. No repo-specific configuration
+# needed — GITHUB_TOKEN and github.repository are both provided automatically
+# by GitHub Actions, so this works as soon as it lands on any repo with
+# Actions enabled and package-write permission (the default for GITHUB_TOKEN
+# unless the org/repo has restricted it).
+#
+# This is the per-branch publisher (feature branches, main). Release tags
+# (meridian-v*) stay owned by docker.yml, which adds the smoke gate and the
+# release tag scheme — so this workflow deliberately has no tags trigger.
+
+on:
+  push:
+    branches: [main, web-claude-login]
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
