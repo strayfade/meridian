@@ -174,16 +174,17 @@ function setLogFilter(filter) {
 async function refresh() {
   const w = $('#window').value;
   try {
+    const apiFetch = window.meridianApiFetch || fetch;
     const [summary, reqs, logs, routes, health, retention] = await Promise.all([
-      fetch('/telemetry/summary?window=' + w).then(r => r.json()),
-      fetch('/telemetry/requests?limit=50&since=' + (Date.now() - Number(w))).then(r => r.json()),
-      fetch('/telemetry/logs?limit=200&since=' + (Date.now() - Number(w))).then(r => r.json()),
-      fetch('/telemetry/routes?window=' + w).then(r => r.json()),
+      apiFetch('/telemetry/summary?window=' + w).then(r => r.json()),
+      apiFetch('/telemetry/requests?limit=50&since=' + (Date.now() - Number(w))).then(r => r.json()),
+      apiFetch('/telemetry/logs?limit=200&since=' + (Date.now() - Number(w))).then(r => r.json()),
+      apiFetch('/telemetry/routes?window=' + w).then(r => r.json()),
       // Lives on the proxy app, not under /telemetry, so it is absent when the
       // telemetry routes are mounted standalone. The accounts table degrades to
       // "no live state known" rather than failing the whole refresh.
-      fetch('/profiles/health').then(r => r.json()).catch(function() { return null; }),
-      fetch('/telemetry/retention').then(r => r.json()),
+      apiFetch('/profiles/health').then(r => r.json()).catch(function() { return null; }),
+      apiFetch('/telemetry/retention').then(r => r.json()),
     ]);
     render(summary, reqs, logs, routes, health);
     renderRetention(retention);

@@ -10,7 +10,8 @@ import { providerSnapshot, disabledProvider } from './providerStatus'
 import { randomUUID } from "node:crypto"
 import type { ProxyConfig, ProxyServer } from "../types"
 import { getBuildInfo } from "../buildInfo"
-import { hasValidApiKey } from "../auth"
+import { hasValidToken } from "../auth"
+import type { ProfileConfig } from "../profiles"
 import { AntigravityRuntime, type AntigravityRun } from "./antigravityRuntime"
 import { AntigravityError, forcedAgTool, toolChoiceInstruction, blocks, contractKey, historyKey, sameAgExecutionContract, parseAgRequest, type AgBlock, type AgResult, type AgRequest } from "./antigravityProtocol"
 
@@ -36,7 +37,11 @@ async function readBody(request: Request): Promise<unknown> {
   } finally { reader.releaseLock() }
 }
 
-export function createAntigravityServer(config: ProxyConfig, runtime = new AntigravityRuntime({ ...config.antigravity, maxConcurrent: config.antigravity?.maxConcurrent ?? config.maxConcurrent })): ProxyServer & { closeBackend(): Promise<void>; providerStatus(): Promise<ProviderUsage> } {
+export function createAntigravityServer(
+  config: ProxyConfig,
+  getProfiles: () => ProfileConfig[],
+  runtime = new AntigravityRuntime({ ...config.antigravity, maxConcurrent: config.antigravity?.maxConcurrent ?? config.maxConcurrent })
+): ProxyServer & { closeBackend(): Promise<void>; providerStatus(): Promise<ProviderUsage> } {
   if (config.profiles?.length || config.defaultProfile) throw new Error("Antigravity does not support Claude profile configuration")
   const responses = new AgResponseStore(undefined, undefined, runtime.state)
   const completedAnswers = new AgCompletedAnswers(runtime.state)
@@ -287,9 +292,10 @@ export function createAntigravityServer(config: ProxyConfig, runtime = new Antig
       activity: runtime.activity(), accounts: [{ id: 'Antigravity account', active: true, ...quota }] }
   }
   const fetch = async (request: Request): Promise<Response> => {
+    const profiles = getProfiles()
     try {
       const path = new URL(request.url).pathname
-      if (!["/health", "/readyz", "/livez"].includes(path) && !hasValidApiKey(request.headers)) throw new AntigravityError("Invalid or missing API key", 401, "authentication_error")
+      if (!["/health", "/readyz", "/livez"].includes(path) && !hasValidToken(request.headers, profiles)) throw new AntigravityError("Invalid or missing Token", 401, "authentication_error")
       if (request.method === 'GET' && ['/', '/providers'].includes(path)) return new Response(providerPageHtml, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       if (request.method === 'GET' && ['/providers/status', '/providers/view'].includes(path)) {
         const data = providerSnapshot([disabledProvider('claude'), await providerStatus()])

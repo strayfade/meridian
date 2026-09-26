@@ -20,7 +20,7 @@ const executable = fileURLToPath(new URL("./fixtures/agy-cli.cjs", import.meta.u
 const closing: Array<() => Promise<void>> = []
 function fixture(options = {}) {
   const runtime = new AntigravityRuntime({ executable, reuseConversations: false, allowToolBridge: true, turnTimeoutMs: 10000, ...options })
-  const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: "antigravity" }, runtime)
+  const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: "antigravity" }, () => [])
   closing.push(server.closeBackend)
   const send = (body: unknown, signal?: AbortSignal) => server.app.fetch(new Request("http://local/v1/messages", { method: "POST", body: JSON.stringify(body), signal }))
   return { runtime, server, send }

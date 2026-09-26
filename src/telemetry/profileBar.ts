@@ -210,13 +210,12 @@ export const profileBarJs = `
 
   function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-  // Dashboard API key. The server gates every data endpoint behind
-  // MERIDIAN_API_KEY when it is set, but a browser fetch carries no key —
-  // so an unlocked dashboard 401s everywhere. The key lives in
+  // Dashboard Token. The server gates every data endpoint behind
+  // per-profile accessKeys when any are set, but a browser fetch carries no key —
+  // so a locked dashboard 401s everywhere. The Token lives in
   // sessionStorage (this tab only, never persisted to disk) and is attached
-  // as x-api-key by meridianApiFetch. Pages keep calling fetch() for public
-  // endpoints and use meridianApiFetch for the rest; the home page renders
-  // the unlock prompt that fills it.
+  // as x-api-key by meridianApiFetch. Pages call meridianApiFetch for
+  // authenticated endpoints; the home page renders the blocking login screen.
   var MERIDIAN_KEY_STORAGE = 'meridian.apiKey';
   function meridianApiKey() {
     try { return sessionStorage.getItem(MERIDIAN_KEY_STORAGE) || ''; }

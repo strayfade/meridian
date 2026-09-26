@@ -154,7 +154,7 @@ describe.skipIf(process.platform === 'win32')('Antigravity completed answer HTTP
     const observing = new Promise<void>(resolve => { entered = resolve })
     const hold = new Promise<void>(resolve => { release = resolve })
     const runtime = new AntigravityRuntime({ executable: fileURLToPath(new URL('./fixtures/agy-cli.cjs', import.meta.url)), statePath, plugins: [{ name: 'slow', onTelemetry: async () => { entered(); await hold } }] })
-    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, runtime)
+    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, () => [])
     cleanup.push(server.closeBackend)
     const pending = server.app.fetch(new Request('http://local/v1/messages', { method: 'POST', headers: { 'idempotency-key': 'shutdown' }, body: JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }] }) }))
     await observing
@@ -171,7 +171,7 @@ describe.skipIf(process.platform === 'win32')('Antigravity completed answer HTTP
 
   it('keeps state open until already-exited workspace cleanup has joined', async () => {
     const runtime = new AntigravityRuntime({ statePath: join(directory(), 'state.sqlite') })
-    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, runtime)
+    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, () => [])
     let release!: () => void, closed = false
     const settling = new Promise<void>(resolve => { release = resolve })
     runtime.settling.add(settling)
@@ -185,7 +185,7 @@ describe.skipIf(process.platform === 'win32')('Antigravity completed answer HTTP
   })
   it('does not add hidden answer storage to OpenAI store:false requests', async () => {
     const runtime = new AntigravityRuntime({ executable: fileURLToPath(new URL('./fixtures/agy-cli.cjs', import.meta.url)), statePath: join(directory(), 'state.sqlite'), reuseConversations: false, allowToolBridge: true })
-    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, runtime)
+    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, () => [])
     cleanup.push(server.closeBackend)
     const response = await server.app.fetch(new Request('http://local/v1/responses', { method: 'POST', body: JSON.stringify({ model: 'fixture-model', store: false, input: [
       { role: 'user', content: 'lookup' },
@@ -201,7 +201,7 @@ describe.skipIf(process.platform === 'win32')('Antigravity completed answer HTTP
     const statePath = join(directory(), 'state.sqlite')
     function backend() {
       const runtime = new AntigravityRuntime({ executable: fileURLToPath(new URL('./fixtures/agy-cli.cjs', import.meta.url)), statePath, reuseConversations: false, allowToolBridge: true })
-      const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, runtime)
+      const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, () => [])
       cleanup.push(server.closeBackend)
       const send = (body: unknown) => server.app.fetch(new Request('http://local/v1/messages', { method: 'POST', headers: { 'idempotency-key': 'persisted-call' }, body: JSON.stringify(body) }))
       return { runtime, server, send }
@@ -224,7 +224,7 @@ describe.skipIf(process.platform === 'win32')('Antigravity completed answer HTTP
     let hookCalls = 0
     function backend() {
       const runtime = new AntigravityRuntime({ executable: fileURLToPath(new URL('./fixtures/agy-cli.cjs', import.meta.url)), statePath, reuseConversations: false, allowToolBridge: true, plugins: [{ name: 'observe', onResponse: () => { hookCalls++ } }] })
-      const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, runtime)
+      const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, () => [])
       cleanup.push(server.closeBackend)
       const send = (body: unknown, key = 'owner') => server.app.fetch(new Request('http://local/v1/messages', { method: 'POST', headers: { 'x-api-key': key }, body: JSON.stringify(body) }))
       return { runtime, server, send }

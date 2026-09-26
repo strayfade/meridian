@@ -1,26 +1,21 @@
 /**
- * Optional API key authentication middleware.
+ * Per-profile Token authentication middleware.
  *
- * When MERIDIAN_API_KEY is set, requests to protected routes must include
- * a matching key via `x-api-key` header or `Authorization: Bearer` header.
- * When unset, all routes are open (default behavior, backward compatible).
- *
- * Uses constant-time comparison to prevent timing attacks.
+ * Replaces MERIDIAN_API_KEY with per-profile accessKey from profiles.json.
+ * - Model routes (/v1/*): Token selects its profile (no header needed).
+ * - Dashboard/mutation routes: any valid Token grants access.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto"
 import type { Context, Next } from "hono"
+import type { ProfileConfig } from "./profiles"
+import { findProfileByToken, anyProfileHasKey } from "./profileKeys"
 
-function getConfiguredKey(): string | undefined {
-  return process.env.MERIDIAN_API_KEY || undefined
-}
+const TOKEN_PREFIX = "mrd_"
 
-/**
- * Whether API key authentication is enabled.
- * True when MERIDIAN_API_KEY is set to a non-empty value.
- */
-export function authEnabled(): boolean {
-  return Boolean(getConfiguredKey())
+/** Whether any profile has an accessKey (gate engagement). */
+export function tokenAuthEnabled(profiles: ProfileConfig[]): boolean {
+  return anyProfileHasKey(profiles)
 }
 
 /**
@@ -28,25 +23,25 @@ export function authEnabled(): boolean {
  * Hashes both values to ensure equal-length comparison regardless of input.
  */
 function safeCompare(a: string, b: string): boolean {
-  const hashA = createHmac("sha256", "meridian").update(a).digest()
-  const hashB = createHmac("sha256", "meridian").update(b).digest()
+  const hashA = createHmac("sha256", "meridian-token").update(a).digest()
+  const hashB = createHmac("sha256", "meridian-token").update(b).digest()
   return timingSafeEqual(hashA, hashB)
 }
 
-/** Shared by the Hono default backend and standard-Request runtime backends. */
-export function hasValidApiKey(headers: Headers): boolean {
-  const key = getConfiguredKey()
-  if (!key) return true
+/** Shared by Hono and standard-Request runtimes. */
+export function hasValidToken(headers: Headers, profiles: ProfileConfig[]): boolean {
+  if (!anyProfileHasKey(profiles)) return true
   const authorization = headers.get("authorization")
   const provided = headers.get("x-api-key") || (authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined)
-  return Boolean(provided && safeCompare(provided, key))
+  if (!provided || !provided.startsWith(TOKEN_PREFIX)) return false
+  return findProfileByToken(provided, profiles) !== undefined
 }
 
 /**
- * Extract the API key from the request.
+ * Extract the Token from the request.
  * Checks x-api-key header first, then Authorization: Bearer.
  */
-function extractKey(c: Context): string | undefined {
+export function extractToken(c: Context): string | undefined {
   const apiKey = c.req.header("x-api-key")
   if (apiKey) return apiKey
 
@@ -57,20 +52,84 @@ function extractKey(c: Context): string | undefined {
 }
 
 /**
- * Hono middleware that rejects requests without a valid API key.
- * No-op when MERIDIAN_API_KEY is not set.
+ * Model-route auth: Token selects profile.
+ * Stashes profileId on context for downstream resolution.
+ * Returns matched profile or throws 401/403.
  */
-export async function requireAuth(c: Context, next: Next) {
-  const key = getConfiguredKey()
-  if (!key) return next()
+export async function requireModelAuth(
+  c: Context,
+  next: Next,
+  profiles: ProfileConfig[],
+  explicitHeader?: string
+): Promise<Response | void> {
+  if (!anyProfileHasKey(profiles)) return next()
 
-  const provided = extractKey(c)
-  if (!provided || !safeCompare(provided, key)) {
+  const provided = extractToken(c)
+  if (!provided || !provided.startsWith(TOKEN_PREFIX)) {
     return c.json({
       type: "error",
       error: {
         type: "authentication_error",
-        message: "Invalid or missing API key",
+        message: "Invalid or missing Token",
+      },
+    }, 401)
+  }
+
+  const matched = findProfileByToken(provided, profiles)
+  if (!matched) {
+    return c.json({
+      type: "error",
+      error: {
+        type: "authentication_error",
+        message: "Invalid or missing Token",
+      },
+    }, 401)
+  }
+
+  // Explicit x-meridian-profile header must match Token's profile
+  if (explicitHeader && explicitHeader !== matched.id) {
+    return c.json({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message: `Token belongs to profile "${matched.id}", but x-meridian-profile header specifies "${explicitHeader}"`,
+      },
+    }, 403)
+  }
+
+  c.set("tokenProfileId", matched.id)
+  return next()
+}
+
+/**
+ * Dashboard/mutation auth: any valid Token grants access.
+ * Does not select profile — just validates.
+ */
+export async function requireDashboardAuth(
+  c: Context,
+  next: Next,
+  profiles: ProfileConfig[]
+): Promise<Response | void> {
+  if (!anyProfileHasKey(profiles)) return next()
+
+  const provided = extractToken(c)
+  if (!provided || !provided.startsWith(TOKEN_PREFIX)) {
+    return c.json({
+      type: "error",
+      error: {
+        type: "authentication_error",
+        message: "Invalid or missing Token",
+      },
+    }, 401)
+  }
+
+  const matched = findProfileByToken(provided, profiles)
+  if (!matched) {
+    return c.json({
+      type: "error",
+      error: {
+        type: "authentication_error",
+        message: "Invalid or missing Token",
       },
     }, 401)
   }

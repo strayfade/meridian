@@ -1,49 +1,35 @@
 /**
- * Regression test for issue #477.
+ * Per-profile Token auth audit.
  *
- * Before the fix, every route under `/settings/*` (including
- * `PATCH /settings/api/features/:adapter` which mutates per-adapter SDK
- * feature config — sharedMemory, additionalDirectories, maxBudgetUsd, etc.)
- * was registered without going through `requireAuth`. With
- * `MERIDIAN_API_KEY` set, every other prefix returned 401 to unauthenticated
- * callers; `/settings/*` quietly served full read/write access. SilverResort
- * reported it; this test pins the gate in place.
+ * With the new per-profile Token system (replacing MERIDIAN_API_KEY), every
+ * dashboard/mutation route requires a valid Token from any profile. Model
+ * routes require a Token from the specific profile being accessed.
  *
- * The `audit` block walks every prefix the server registers and asserts an
- * unauthenticated caller is rejected (or the prefix is on a small explicit
- * public allowlist — `/`, `/health`). That makes the next "we forgot to
- * protect /<new-feature>" mistake fail CI instead of waking up as a security
- * report.
+ * This test verifies that all non-public routes are gated by the dashboard
+ * auth middleware when at least one profile has an accessKey.
  */
 import { describe, it, expect, beforeAll, afterAll } from "bun:test"
 
-const SAVED_KEY = process.env.MERIDIAN_API_KEY
-const TEST_KEY = "test-meridian-api-key"
-
-beforeAll(() => {
-  process.env.MERIDIAN_API_KEY = TEST_KEY
-})
-
-afterAll(() => {
-  if (SAVED_KEY !== undefined) process.env.MERIDIAN_API_KEY = SAVED_KEY
-  else delete process.env.MERIDIAN_API_KEY
-})
-
-// Imported after env is set so auth middleware reads our test key on its
-// first invocation. requireAuth re-reads env per-call, but using `await
-// import()` here keeps the timing explicit and matches the rest of the
-// test suite's pattern for env-sensitive imports.
+const { mintToken } = await import("../proxy/profileKeys")
 const { createProxyServer } = await import("../proxy/server")
 
-describe("MERIDIAN_API_KEY — /settings/api/* (regression for #477)", () => {
-  it("rejects GET /settings/api/features without auth", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+describe("Per-profile Token auth — /settings/api/* and all dashboard routes", () => {
+  let token: string
+  let profiles: Array<{ id: string; type: string; accessKey: string }>
+
+  beforeAll(() => {
+    token = mintToken()
+    profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+  })
+
+  it("rejects GET /settings/api/features without Token", async () => {
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
     const res = await app.fetch(new Request("http://localhost/settings/api/features"))
     expect(res.status).toBe(401)
   })
 
-  it("rejects PATCH /settings/api/features/:adapter without auth", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+  it("rejects PATCH /settings/api/features/:adapter without Token", async () => {
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
     const res = await app.fetch(new Request("http://localhost/settings/api/features/opencode", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -52,76 +38,56 @@ describe("MERIDIAN_API_KEY — /settings/api/* (regression for #477)", () => {
     expect(res.status).toBe(401)
   })
 
-  it("rejects DELETE /settings/api/features/:adapter without auth", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+  it("rejects DELETE /settings/api/features/:adapter without Token", async () => {
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
     const res = await app.fetch(new Request("http://localhost/settings/api/features/opencode", {
       method: "DELETE",
     }))
     expect(res.status).toBe(401)
   })
 
-  it("rejects GET /settings (HTML dashboard) without auth — same protection as /profiles, /plugins", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+  it("rejects GET /settings (HTML dashboard) without Token", async () => {
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
     const res = await app.fetch(new Request("http://localhost/settings"))
     expect(res.status).toBe(401)
   })
 
-  it("accepts GET /settings/api/features with a matching x-api-key", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+  it("accepts GET /settings/api/features with matching Token", async () => {
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
     const res = await app.fetch(new Request("http://localhost/settings/api/features", {
-      headers: { "x-api-key": TEST_KEY },
+      headers: { "x-api-key": token },
     }))
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, unknown>
-    // Body shape is FeatureConfig — a record of adapter → partial features.
-    // We only assert it parses; exact contents depend on host config.
     expect(typeof body).toBe("object")
   })
 
-  it("accepts GET /settings/api/features with a matching Bearer token", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+  it("accepts GET /settings/api/features with matching Bearer token", async () => {
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
     const res = await app.fetch(new Request("http://localhost/settings/api/features", {
-      headers: { "authorization": `Bearer ${TEST_KEY}` },
+      headers: { "authorization": `Bearer ${token}` },
     }))
     expect(res.status).toBe(200)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Audit: any sensitive route added in the future must go through requireAuth.
+// Audit: any sensitive route added in the future must go through dashboardAuth.
 // ---------------------------------------------------------------------------
-describe("auth audit: every registered prefix is protected when MERIDIAN_API_KEY is set", () => {
-  // Routes that are *intentionally* public. They serve read-only,
-  // non-sensitive content (landing page; auth status; the two probes). If
-  // you're adding to this list, that's a security review. When in doubt, gate
-  // it.
-  //
-  // The review for `/livez` and `/readyz`, since this list is where it belongs:
-  //
-  //   what they emit  `ok`, or a check NAME and pass/fail per check. No
-  //                   account, no email, no token, no profile id - strictly
-  //                   less than `/health` beside them, which answers with the
-  //                   signed-in email and subscription type to anyone.
-  //   why not gated   a 401 is what a load balancer reads as "this backend is
-  //                   down". Gating these would make every instance look
-  //                   unhealthy the moment MERIDIAN_API_KEY is set, so an auth
-  //                   setting would become a total outage of whatever sits in
-  //                   front - the failure this pair exists to prevent.
+describe("auth audit: every registered prefix is protected when profiles have accessKeys", () => {
+  // Routes that are intentionally public. They serve read-only,
+  // non-sensitive content (landing page; auth status; the two probes).
   const PUBLIC_PREFIXES = new Set(["/", "/health", "/livez", "/readyz"])
 
   it("rejects unauthenticated requests to every non-public route prefix", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+    const token = mintToken()
+    const profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
 
-    // Hono exposes the registered routes via `app.routes`. Each entry has
-    // { method, path, handler }. Middleware mounts (app.use) appear too but
-    // with method "ALL"; we want the actual route handlers (GET/POST/etc.)
-    // for paths to probe.
     const routes = (app as unknown as { routes: Array<{ method: string; path: string }> }).routes
     const prefixes = new Set<string>()
     for (const r of routes) {
       if (r.method === "ALL") continue
-      // Strip param placeholders so `/settings/api/features/:adapter`
-      // becomes `/settings/api/features/x` — a fetchable path.
       const probePath = r.path.replace(/:\w+/g, "x")
       prefixes.add(probePath)
     }
@@ -130,13 +96,39 @@ describe("auth audit: every registered prefix is protected when MERIDIAN_API_KEY
     for (const path of prefixes) {
       if (PUBLIC_PREFIXES.has(path)) continue
       const res = await app.fetch(new Request(`http://localhost${path}`))
-      // Non-401 → not gated. 401 → correctly gated. Any other status (404,
-      // 405) on a route the server registered would itself be surprising.
       if (res.status !== 401) {
-        failures.push(`${path} returned ${res.status} (expected 401 — not protected by requireAuth)`)
+        failures.push(`${path} returned ${res.status} (expected 401 — not protected by dashboardAuth)`)
       }
     }
 
     expect(failures).toEqual([])
+  })
+
+  it("model route /v1/messages requires Token", async () => {
+    const token = mintToken()
+    const profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
+
+    const res = await app.fetch(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "sonnet", messages: [{ role: "user", content: "hi" }], max_tokens: 100 }),
+    }))
+    // /v1/messages requires model auth which also needs a Token
+    expect(res.status).toBe(401)
+  })
+
+  it("model route /v1/messages accepts valid Token from matching profile", async () => {
+    const token = mintToken()
+    const profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
+
+    // This will fail with 503 (no real SDK) but should NOT be 401
+    const res = await app.fetch(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": token },
+      body: JSON.stringify({ model: "sonnet", messages: [{ role: "user", content: "hi" }], max_tokens: 100 }),
+    }))
+    expect(res.status).not.toBe(401)
   })
 })

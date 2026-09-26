@@ -10,7 +10,8 @@ var loading = false;
 async function loadProviders() {
   if (loading) return; loading = true;
   try {
-    var response = await fetch('/providers/view?provider=' + selected);
+    const apiFetch = window.meridianApiFetch || fetch;
+    var response = await apiFetch('/providers/view?provider=' + selected);
     if (!response.ok) throw new Error(response.status === 401 ? 'Authentication required to view provider usage.' : 'Provider data is unavailable. Retrying shortly.');
     var html = await response.text();
     var target = document.getElementById('provider-content');

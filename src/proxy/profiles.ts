@@ -127,6 +127,8 @@ export interface ProfileConfig {
   baseUrl?: string
   /** Long-lived OAuth token from `claude setup-token` (oauth-token profiles) */
   oauthToken?: string
+  /** Dashboard/API Token for this profile — minted via UI, replaces MERIDIAN_API_KEY */
+  accessKey?: string
   /**
    * Former names left behind by `meridian profile rename`. Each is a redirect,
    * not a second name: requests naming one are served by this profile until
@@ -389,7 +391,7 @@ function buildResolvedProfile(profile: ProfileConfig): ResolvedProfile {
 export function listProfiles(
   profiles: ProfileConfig[] | undefined,
   defaultProfile: string | undefined
-): Array<{ id: string; type: ProfileType; isActive: boolean; aliases?: string[] }> {
+): Array<{ id: string; type: ProfileType; isActive: boolean; aliases?: string[]; accessKey?: string }> {
   const effective = getEffectiveProfiles(profiles)
   if (effective.length === 0) return []
 
@@ -399,5 +401,6 @@ export function listProfiles(
     type: p.type ?? "claude-max",
     isActive: p.id === currentActive,
     ...(p.aliases && p.aliases.length > 0 ? { aliases: p.aliases } : {}),
+    ...(p.accessKey ? { accessKey: p.accessKey } : {}),
   }))
 }

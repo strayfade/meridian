@@ -19,7 +19,7 @@ import { AbortableSemaphore, getProcessSdkSemaphore, type SemaphoreLease } from 
 import { closeServerWithGracePeriod, trackServerConnections } from "./shutdown"
 import { fetchOAuthUsage, fetchOAuthUsageResult, toUsageEntry, peekOAuthUsage } from "./oauthUsage"
 import { resolveSdkWorkingDirectory } from "./cwd"
-import type { Context } from "hono"
+import type { Context, Next } from "hono"
 import { DEFAULT_PROXY_CONFIG, resolveBackendConfig } from "./types"
 import { createAntigravityServer } from "./backends/antigravity"
 import { env, envBool, envInt } from "../env"
@@ -91,7 +91,7 @@ import { translateResponsesToAnthropic, translateAnthropicToResponses, createRes
 import { flattenAssistantContent, normalizeStructuredUserContent, replayToolResultHeader, frameStructuredReplay, coalesceStructuredUserMessages } from "./replay"
 import { unstreamedAssistantBlockFrames } from "./unstreamedAssistant"
 import { extractAdvisorModel, extractSystemText, getLastUserMessage, stripAdvisorTools, stripNonStandardStreamFields, MULTIMODAL_TYPES, buildToolUseIndex, frameReplayTurns } from "./messages"
-import { requireAuth, authEnabled } from "./auth"
+import { requireModelAuth, requireDashboardAuth, tokenAuthEnabled, extractToken } from "./auth"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, resolveQueryConfigDir, singleTurnCapLiftRaisesBudget, type QueryContext } from "./query"
 import { normalizeEffort } from "./effort"
@@ -100,7 +100,7 @@ import { runTransformHook, buildPipeline, createRequestContext } from "./transfo
 import { getAdapterTransforms } from "./transforms/registry"
 import { loadPlugins, getActiveTransforms } from "./plugins/loader"
 import type { LoadedPlugin } from "./plugins/types"
-import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, resolveActiveProfileId, getEffectiveProfiles, restoreActiveProfile, invalidateDiskProfileCache, shareableCredentialDir, type ResolvedProfile } from "./profiles" 
+import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, resolveActiveProfileId, getEffectiveProfiles, restoreActiveProfile, invalidateDiskProfileCache, shareableCredentialDir, type ResolvedProfile, type ProfileConfig } from "./profiles" 
 import { createProfileWebLogin, addWebProfile, addWebOAuthTokenProfile, removeWebProfile } from "./profileWeb"
 import { followStatus, startFollowPolling, stopFollowPolling, logFollowBanner, FOLLOW_POLL_INTERVAL_MS } from "./followActive"
 import { organizationNames, organizationNeedsRefresh, refreshOrganizationNameSoon } from "./organizationName"
@@ -620,10 +620,13 @@ type PriorityDispatchOptions = {
 }
 
 export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServer {
-  if (resolveBackendConfig(config).backend === "antigravity") return createAntigravityServer(resolveBackendConfig(config))
-  const finalConfig = resolveBackendConfig(config)
+  const backendConfig = resolveBackendConfig(config)
+  if (backendConfig.backend === "antigravity") return createAntigravityServer(backendConfig, () => [])
+  const finalConfig = backendConfig
   const claudeProviderFacts = new ClaudeProviderFacts()
-  const antigravity = finalConfig.backend === "combined" ? createAntigravityServer({ ...finalConfig, profiles: undefined, defaultProfile: undefined }) : undefined
+  const antigravity = finalConfig.backend === "combined"
+    ? createAntigravityServer({ ...finalConfig, profiles: undefined, defaultProfile: undefined }, () => getEffectiveProfiles(finalConfig.profiles))
+    : undefined
   proxyLogSilent = finalConfig.silent
   const serverVersion = finalConfig.version ?? "unknown"
 
@@ -967,31 +970,29 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
   app.use("*", cors())
 
-  // Optional API key auth — protects all routes except / and /health
-  // when MERIDIAN_API_KEY is set. No-op when unset.
-  //
-  // When adding a new sensitive prefix, add it here. The audit test in
-  // proxy-settings-auth.test.ts walks every registered route and fails CI
-  // if any non-public path responds with anything other than 401 to an
-  // unauthenticated request. That's the safety net against the next "we
-  // forgot to gate it" mistake (issue #477 was the catalyst — `/settings/*`
-  // was registered without going through requireAuth, so unauthenticated
-  // callers could mutate adapter SDK feature config via PATCH).
-  app.use("/v1/*", requireAuth)
-  app.use("/messages", requireAuth)
-  app.use("/telemetry/*", requireAuth)
-  app.use("/telemetry", requireAuth)
-  app.use("/metrics", requireAuth)
-  app.use("/profiles/*", requireAuth)
-  app.use("/profiles", requireAuth)
-  app.use("/plugins/*", requireAuth)
-  app.use("/plugins", requireAuth)
-  app.use("/settings/*", requireAuth)
-  app.use("/settings", requireAuth)
-  app.use("/design-login", requireAuth)
-  app.use("/providers", requireAuth)
-  app.use("/providers/*", requireAuth)
-  app.use("/antigravity/*", requireAuth)
+  // Per-profile Token auth — protects routes when any profile has an accessKey.
+  // Model routes (/v1/*, /messages): Token selects its profile.
+  // Dashboard/mutation routes: any valid Token grants access.
+  const modelAuth = (c: Context, next: Next) =>
+    requireModelAuth(c, next, getEffectiveProfiles(finalConfig.profiles), c.req.header("x-meridian-profile")?.trim())
+  const dashboardAuth = (c: Context, next: Next) =>
+    requireDashboardAuth(c, next, getEffectiveProfiles(finalConfig.profiles))
+
+  app.use("/v1/*", modelAuth)
+  app.use("/messages", modelAuth)
+  app.use("/telemetry/*", dashboardAuth)
+  app.use("/telemetry", dashboardAuth)
+  app.use("/metrics", dashboardAuth)
+  app.use("/profiles/*", dashboardAuth)
+  app.use("/profiles", dashboardAuth)
+  app.use("/plugins/*", dashboardAuth)
+  app.use("/plugins", dashboardAuth)
+  app.use("/settings/*", dashboardAuth)
+  app.use("/settings", dashboardAuth)
+  app.use("/design-login", dashboardAuth)
+  app.use("/providers", dashboardAuth)
+  app.use("/providers/*", dashboardAuth)
+  app.use("/antigravity/*", dashboardAuth)
 
   // Separate provider routes; Claude retains all existing paths and semantics.
   app.all('/antigravity/*', c => {
@@ -1467,7 +1468,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     })
   }
 
-  app.use("/auth/*", requireAuth)
+  app.use("/auth/*", dashboardAuth)
 
   app.get("/", (c) => {
     // API clients get JSON, browsers get the landing page
@@ -2003,7 +2004,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         const profile = resolveProfile(
           finalConfig.profiles,
           finalConfig.defaultProfile,
-          options.forcedProfileId || c.req.header("x-meridian-profile") || undefined,
+          options.forcedProfileId || c.get("tokenProfileId") || c.req.header("x-meridian-profile") || undefined,
           routingMode === "sticky"
             ? { routingMode, stickySessionKey: adapter.getSessionId(c, body) }
             : undefined
@@ -8572,6 +8573,64 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
     return c.json({ success: true, removed: body.id })
   })
 
+  app.post("/profiles/:id/api-key", async (c) => {
+    if (envBool("CREDENTIALS_READONLY")) {
+      return c.json({ error: "MERIDIAN_CREDENTIALS_READONLY=1 — this instance may not modify credentials." }, 403)
+    }
+    const id = c.req.param("id")
+    const profiles = getEffectiveProfiles(finalConfig.profiles)
+    const profile = profiles.find(p => p.id === id)
+    if (!profile) {
+      return c.json({ error: `Profile "${id}" not found` }, 404)
+    }
+    // Check if profile is from config (env var) - those can't be modified
+    const configIds = new Set((finalConfig.profiles ?? []).map(p => p.id))
+    if (configIds.has(id)) {
+      return c.json({ error: "Cannot modify API key for config-defined profile" }, 403)
+    }
+    const { mintToken } = await import("./profileKeys")
+    const accessKey = mintToken()
+    profile.accessKey = accessKey
+    // Write updated profiles to disk
+    const { writeFileSync } = await import("node:fs")
+    const { configPath } = await import("../configDir")
+    const file = configPath("profiles.json")
+    const allProfiles = getEffectiveProfiles(finalConfig.profiles)
+    writeFileSync(file, JSON.stringify(allProfiles, null, 2), { mode: 0o600 })
+    invalidateDiskProfileCache()
+    claudeLog("profile.api_key_minted", { id, via: "web" })
+    plog(`[PROXY] API key minted for profile: ${id}`)
+    return c.json({ success: true, accessKey })
+  })
+
+  app.delete("/profiles/:id/api-key", async (c) => {
+    if (envBool("CREDENTIALS_READONLY")) {
+      return c.json({ error: "MERIDIAN_CREDENTIALS_READONLY=1 — this instance may not modify credentials." }, 403)
+    }
+    const id = c.req.param("id")
+    const profiles = getEffectiveProfiles(finalConfig.profiles)
+    const profile = profiles.find(p => p.id === id)
+    if (!profile) {
+      return c.json({ error: `Profile "${id}" not found` }, 404)
+    }
+    // Check if profile is from config (env var) - those can't be modified
+    const configIds = new Set((finalConfig.profiles ?? []).map(p => p.id))
+    if (configIds.has(id)) {
+      return c.json({ error: "Cannot modify API key for config-defined profile" }, 403)
+    }
+    profile.accessKey = undefined
+    // Write updated profiles to disk
+    const { writeFileSync } = await import("node:fs")
+    const { configPath } = await import("../configDir")
+    const file = configPath("profiles.json")
+    const allProfiles = getEffectiveProfiles(finalConfig.profiles)
+    writeFileSync(file, JSON.stringify(allProfiles, null, 2), { mode: 0o600 })
+    invalidateDiskProfileCache()
+    claudeLog("profile.api_key_revoked", { id, via: "web" })
+    plog(`[PROXY] API key revoked for profile: ${id}`)
+    return c.json({ success: true })
+  })
+
   // --- Plugin management routes ---
 
   app.get("/plugins/list", async (c) => {
@@ -9447,7 +9506,7 @@ export function installProxyProcessErrorHandlers(): void {
 export async function startProxyServer(config: Partial<ProxyConfig> = {}): Promise<ProxyInstance> {
   const selectedConfig = resolveBackendConfig(config)
   if (selectedConfig.backend === "antigravity") {
-    const backend = createAntigravityServer(selectedConfig)
+    const backend = createAntigravityServer(selectedConfig, () => [])
     await backend.initPlugins?.()
     if (selectedConfig.installProcessErrorHandlers) installProxyProcessErrorHandlers()
     const server = serve({ fetch: backend.app.fetch, port: selectedConfig.port, hostname: selectedConfig.host, overrideGlobalObjects: false }, info => {

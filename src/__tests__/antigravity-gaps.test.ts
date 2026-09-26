@@ -44,7 +44,7 @@ const scope = agResponseScope(new Headers())
 const response = { id: 'r', output: [], status: 'completed' }
 function fixture(path?: string) {
   const runtime = new AntigravityRuntime({ executable: fileURLToPath(new URL('./fixtures/agy-cli.cjs', import.meta.url)), allowToolBridge: true, statePath: path })
-  const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, runtime)
+  const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, () => [])
   closing.push(server.closeBackend)
   return { runtime, server, post: (body: unknown) => server.app.fetch(new Request('http://local/v1/responses', { method: 'POST', body: JSON.stringify(body) })), get: (path: string, method = 'GET') => server.app.fetch(new Request('http://local/v1/responses/' + path, { method })) }
 }
@@ -232,7 +232,7 @@ describe.skipIf(process.platform === 'win32')('Antigravity background and durabl
   })
   it('reports native restoration disabled when conversation reuse is off', async () => {
     const runtime = new AntigravityRuntime({ executable: fileURLToPath(new URL('./fixtures/agy-cli.cjs', import.meta.url)), statePath:join(root(),'state.sqlite'),reuseConversations:false })
-    const server = createAntigravityServer({...DEFAULT_PROXY_CONFIG,backend:'antigravity'},runtime)
+    const server = createAntigravityServer({...DEFAULT_PROXY_CONFIG,backend:'antigravity'}, () => [])
     closing.push(server.closeBackend)
     const health = await body(await server.app.fetch(new Request('http://local/health')))
     expect(health.capabilities).toMatchObject({persistentResume:false,conversationReuse:false})

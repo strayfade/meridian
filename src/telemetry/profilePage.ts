@@ -313,7 +313,8 @@ async function commitRename(from) {
   if (!to || to === from) { cancelRename(); return; }
   var data;
   try {
-    var res = await fetch('/profiles/rename', {
+    const apiFetch = window.meridianApiFetch || fetch;
+    var res = await apiFetch('/profiles/rename', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: from, to: to })
@@ -337,10 +338,11 @@ async function commitRename(from) {
 async function refresh() {
   if (editingProfile) return;
   try {
+    const apiFetch = window.meridianApiFetch || fetch;
     var [profilesRes, quotaRes, routingRes] = await Promise.all([
-      fetch('/profiles/list'),
-      fetch('/v1/usage/quota/all').catch(function () { return null; }),
-      fetch('/settings/api/routing').catch(function () { return null; }),
+      apiFetch('/profiles/list'),
+      apiFetch('/v1/usage/quota/all').catch(function () { return null; }),
+      apiFetch('/settings/api/routing').catch(function () { return null; }),
     ]);
     var profiles = await profilesRes.json();
     var quota = null;
@@ -637,7 +639,8 @@ function copyCmd(btn) {
 }
 
 async function switchProfile(id) {
-  const res = await fetch('/profiles/active', {
+  const apiFetch = window.meridianApiFetch || fetch;
+  const res = await apiFetch('/profiles/active', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ profile: id })

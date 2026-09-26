@@ -124,7 +124,7 @@ afterEach(async () => { for (const close of closing.splice(0)) await close() })
 describe.skipIf(process.platform === 'win32')('Antigravity stored Responses HTTP/CLI', () => {
   it('retrieves, continues, deletes and isolates server instances with the actual adapter', async () => {
     const runtime = new AntigravityRuntime({ executable: fileURLToPath(new URL('./fixtures/agy-cli.cjs', import.meta.url)), allowToolBridge: true })
-    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, runtime)
+    const server = createAntigravityServer({ ...DEFAULT_PROXY_CONFIG, backend: 'antigravity' }, () => [])
     closing.push(server.closeBackend)
     const post = (body: unknown) => server.app.fetch(new Request('http://local/v1/responses', { method: 'POST', body: JSON.stringify(body) }))
     const firstHttp = await post({ model: 'fixture-model', input: 'NATIVE_FIRST' })
