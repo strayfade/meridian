@@ -7,11 +7,9 @@
  * header from profileBar.ts. Fetches /health, /telemetry/summary,
  * /v1/usage/quota/all, /profiles/list and /settings/api/routing client-side for live data.
  *
- * Token authentication: when any profile has an accessKey, the dashboard
- * requires a valid Token. The Token is stored in sessionStorage (tab-only)
- * and attached as x-api-key via window.meridianApiFetch. An invalid/missing
- * Token renders a full-page blocking login screen — no nav, no dashboard content.
- * Any profile's Token grants full dashboard access.
+ * No sign-in: the dashboard is expected to sit behind a firewall, so the page
+ * fetches its data directly and never prompts for a Token. Token auth applies
+ * only to the model endpoints (/v1/*, /messages).
  */
 
 import { profileBarCss, profileBarHtml, profileBarJs, themeCss } from "./profileBar"
@@ -161,50 +159,13 @@ export const landingHtml = `<!DOCTYPE html>
   .footer a { color: var(--accent); text-decoration: none; }
   .footer a:hover { text-decoration: underline; }
 
-  /* ==== Token Login Page (blocking) ==== */
-  .login-page { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
-  .login-box { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px; }
-  .login-box h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; text-align: center; }
-  .login-box .subtitle { text-align: center; color: var(--muted); margin-bottom: 28px; font-size: 14px; }
-  .login-box .token-input-group { margin-bottom: 20px; }
-  .login-box label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
-  .login-box .token-input { width: 100%; padding: 10px 12px; font-size: 14px;
-    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
-  .login-box .token-input:focus { outline: none; border-color: var(--accent); }
-  .login-box .btn-submit { width: 100%; padding: 12px; font-size: 14px; font-weight: 600; }
-  .login-box .login-error { color: var(--red); font-size: 13px; text-align: center; margin-top: 12px; min-height: 20px; }
-  .login-box .login-footer { margin-top: 24px; text-align: center; font-size: 12px; color: var(--muted); }
-  .login-box .login-footer a { color: var(--accent); text-decoration: none; }
-  .login-box .login-footer a:hover { text-decoration: underline; }
-
-  /* Hidden content during login */
-  .hidden { display: none !important; }
-
   ${profileBarCss}
 </style>
 </head>
 <body>
 ` + profileBarHtml + `
 <div class="container" id="mainContent">
-  <div id="loginScreen" class="hidden">
-    <div class="login-box">
-      <h1>Meridian</h1>
-      <p class="subtitle">Enter a profile Token (mrd_...) or the server MERIDIAN_API_KEY to access the dashboard</p>
-      <form id="tokenForm" onsubmit="return false;">
-        <div class="token-input-group">
-          <label for="tokenInput">Token</label>
-          <input type="password" id="tokenInput" class="token-input" placeholder="mrd_..." autocomplete="off" required>
-        </div>
-        <button type="button" class="btn btn-submit" id="tokenSubmit" onclick="submitToken()">Sign in</button>
-        <div class="login-error" id="tokenError"></div>
-      </form>
-      <p class="login-footer">Any profile Token works. Generate one from the Profiles page after signing in.</p>
-    </div>
-  </div>
-
-  <div id="dashboardContent" class="hidden">
-    <div id="content"><div style="color:var(--muted);padding:40px;text-align:center">Loading…</div></div>
-  </div>
+  <div id="content"><div style="color:var(--muted);padding:40px;text-align:center">Loading…</div></div>
 </div>
 
 ${reorderLiveRegionHtml}
@@ -213,87 +174,19 @@ ${reorderLiveRegionHtml}
   ${profileFactsJs}
   ${reorderClientJs}
 
-  /* ==== Token Login Logic ==== */
-  const TOKEN_STORAGE = 'meridian.apiKey';
-  var tokenErrorEl = document.getElementById('tokenError');
-  var tokenInputEl = document.getElementById('tokenInput');
-  var tokenSubmitEl = document.getElementById('tokenSubmit');
-  var loginScreenEl = document.getElementById('loginScreen');
-  var dashboardContentEl = document.getElementById('dashboardContent');
-
-  function storedToken() {
-    try { return sessionStorage.getItem(TOKEN_STORAGE) || ''; }
-    catch (_) { return ''; }
-  }
-  function setStoredToken(key) {
-    try {
-      if (key) sessionStorage.setItem(TOKEN_STORAGE, key);
-      else sessionStorage.removeItem(TOKEN_STORAGE);
-    } catch (_) { /* lost token is not worth failing over */ }
-  }
-
-  async function validateToken(token) {
-    try {
-      var res = await fetch('/profiles/list', { headers: { 'x-api-key': token } });
-      return res.ok;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function showLoginScreen(error) {
-    loginScreenEl.classList.remove('hidden');
-    dashboardContentEl.classList.add('hidden');
-    if (error) tokenErrorEl.textContent = error;
-    tokenInputEl.focus();
-  }
-
-  function showDashboard() {
-    loginScreenEl.classList.add('hidden');
-    dashboardContentEl.classList.remove('hidden');
-  }
-
-  async function submitToken() {
-    var token = tokenInputEl.value.trim();
-    if (!token) { tokenErrorEl.textContent = 'Enter a Token'; return; }
-    tokenSubmitEl.disabled = true; tokenSubmitEl.textContent = 'Verifying…'; tokenErrorEl.textContent = '';
-    var ok = await validateToken(token);
-    if (ok) {
-      setStoredToken(token);
-      tokenErrorEl.textContent = '';
-      showDashboard();
-      refresh();
-      if (window.meridianHeaderRefresh) window.meridianHeaderRefresh();
-    } else {
-      tokenErrorEl.textContent = 'Invalid Token';
-      tokenSubmitEl.disabled = false; tokenSubmitEl.textContent = 'Sign in';
-      tokenInputEl.focus();
-    }
-  }
-
-  /* ==== Dashboard Auth Helpers ==== */
+  /* ==== Helpers ==== */
   function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
   function tokens(v){if(v==null)return '—';if(v>=1e6)return (v/1e6).toFixed(1)+'M';if(v>=1e3)return (v/1e3).toFixed(1)+'k';return String(v)}
   function usd(v){if(v==null)return '—';return '$'+Number(v).toFixed(2)}
   function ms(v){if(v==null)return '—';return v<1000?v+'ms':(v/1000).toFixed(1)+'s'}
 
-  // Authenticated fetches. A 401 means the server requires a Token and the
-  // browser isn't sending it (or it's wrong) — flag locked so the page
-  // renders the login screen instead of undefined metrics.
-  function apiFetch(url, opts) {
-    return (window.meridianApiFetch || fetch)(url, opts);
-  }
   function apiGet(url) {
-    return apiFetch(url).then(function(r) {
-      if (r.status === 401) { var e = new Error('unauthorized'); e.locked = true; throw e; }
-      return r.json();
-    });
+    return fetch(url).then(function(r) { return r.json(); });
   }
   function apiPost(url, body, headers) {
     var h = { 'Content-Type': 'application/json' };
     if (headers) { for (var k in headers) h[k] = headers[k]; }
-    return apiFetch(url, { method: 'POST', headers: h, body: JSON.stringify(body) }).then(function(r) {
-      if (r.status === 401) { var e = new Error('unauthorized'); e.locked = true; throw e; }
+    return fetch(url, { method: 'POST', headers: h, body: JSON.stringify(body) }).then(function(r) {
       return r.json().then(function(data) { return { status: r.status, data: data }; });
     });
   }
@@ -308,64 +201,29 @@ ${reorderLiveRegionHtml}
   var confirmingRemove = null;
   var meridianReorder = { adopt: function(){}, focusAnchor: function(){ return null; }, restoreFocus: function(){} };
 
-  /* ==== Initial bootstrap ==== */
-  // Check for stored key on load; if present, validate and show dashboard.
-  // If validation fails, clear and fall through. With no stored key, probe
-  // /profiles/list unauthenticated: when auth is disabled (no accessKey and
-  // no MERIDIAN_API_KEY) it answers 200 and the dashboard opens directly.
-  async function bootstrap() {
-    var token = storedToken();
-    if (token) {
-      var ok = await validateToken(token);
-      if (ok) {
-        showDashboard();
-        refresh();
-        if (window.meridianHeaderRefresh) window.meridianHeaderRefresh();
-        return;
-      }
-      // Invalid/expired key — clear and fall through to login
-      setStoredToken('');
-    }
-    try {
-      var probe = await fetch('/profiles/list');
-      if (probe.ok) {
-        showDashboard();
-        refresh();
-        if (window.meridianHeaderRefresh) window.meridianHeaderRefresh();
-        return;
-      }
-    } catch (_) { /* no probe — fall through to login */ }
-    showLoginScreen();
-  }
-
-  /* ==== Dashboard rendering (only runs after successful Token auth) ==== */
-  function markLocked(e) { if (e && e.locked) { setStoredToken(''); showLoginScreen('Session expired — please sign in again.'); } return null; }
-
+  /* ==== Dashboard rendering ==== */
   async function refresh() {
     try {
+      var unavailable = function() { return null; };
       var results = await Promise.all([
         fetch('/health').then(r => r.json()),
-        apiGet('/telemetry/summary?window=86400000').catch(markLocked),
-        apiGet('/v1/usage/quota/all').catch(markLocked),
-        apiGet('/profiles/list').catch(markLocked),
-        apiGet('/settings/api/routing').catch(markLocked)
+        apiGet('/telemetry/summary?window=86400000').catch(unavailable),
+        apiGet('/v1/usage/quota/all').catch(unavailable),
+        apiGet('/profiles/list').catch(unavailable),
+        apiGet('/settings/api/routing').catch(unavailable)
       ]);
       var health = results[0], stats = results[1], quota = results[2], profiles = results[3], routing = results[4];
       meridianReorder.adopt(routing);
       render(health, stats, quota, profiles);
     } catch (e) {
-      if (!e || !e.locked) {
-        document.getElementById('content').innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">Could not connect</div>';
-      }
+      document.getElementById('content').innerHTML = '<div style="color:var(--red);padding:40px;text-align:center">Could not connect</div>';
     }
   }
 
   function opFailed(e, fallback) {
-    if (e && e.locked) { return; } // markLocked handles it
     notice = { type: 'err', text: fallback, at: Date.now() };
     if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]);
   }
-
   function introSection(h) {
     var b = h.backend === 'antigravity' ? 'Antigravity (agy CLI)' : 'Claude Agent SDK';
     var v = h.version || '—';
@@ -491,6 +349,7 @@ ${reorderLiveRegionHtml}
   function render(h, s, q, pl) {
     lastData = [h, s, q, pl];
     s = s || {};
+    q = q || {};
     var refocusId = meridianReorder.focusAnchor();
     var o = '';
     o += introSection(h);
@@ -508,7 +367,7 @@ ${reorderLiveRegionHtml}
     var tu = s.tokenUsage || {};
     var cache = tu.avgCacheHitRate != null ? Math.round(tu.avgCacheHitRate * 100) + '%' : '—';
     var reqTotal = s.totalRequests == null ? '—' : String(s.totalRequests);
-    var errLine = s.errorCount > 0 ? s.errorCount + ' error' + (s.errorCount === 1 ? '' : 's') : (s.totalRequests == null ? 'locked' : 'no errors');
+    var errLine = s.errorCount > 0 ? s.errorCount + ' error' + (s.errorCount === 1 ? '' : 's') : (s.totalRequests == null ? 'unavailable' : 'no errors');
     var items = [
       ['Requests', reqTotal, '', errLine, s.errorCount > 0 ? 'red' : ''],
       ['Tokens Out', tokens(tu.totalOutputTokens), '', tokens(tu.totalInputTokens) + ' in'],
@@ -546,7 +405,7 @@ ${reorderLiveRegionHtml}
   function startLogin(id) {
     loginState = { profile: id, busy: true, error: null, authorizeUrl: null, state: null };
     if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]);
-    apiFetch('/auth/claude/start?profile=' + encodeURIComponent(id))
+    fetch('/auth/claude/start?profile=' + encodeURIComponent(id))
       .then(function(r) { return r.json().then(function(d) { return { status: r.status, d: d }; }); })
       .then(function(res) {
         if (res.status === 200 && res.d.authorizeUrl) {
@@ -556,9 +415,8 @@ ${reorderLiveRegionHtml}
         }
         if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]);
       })
-      .catch(function(e) {
-        if (e && e.locked) { setStoredToken(''); showLoginScreen('Session expired — please sign in again.'); loginState = null; }
-        else { loginState = { profile: id, busy: false, error: 'Could not reach the server.', authorizeUrl: null, state: null }; }
+      .catch(function() {
+        loginState = { profile: id, busy: false, error: 'Could not reach the server.', authorizeUrl: null, state: null };
         if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]);
       });
   }
@@ -581,9 +439,8 @@ ${reorderLiveRegionHtml}
           if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]);
         }
       })
-      .catch(function(e) {
-        if (e && e.locked) { setStoredToken(''); showLoginScreen('Session expired — please sign in again.'); loginState = null; if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]); }
-        else { loginState.error = 'Could not reach the server.'; loginState.busy = false; if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]); }
+      .catch(function() {
+        loginState.error = 'Could not reach the server.'; loginState.busy = false; if (lastData) render(lastData[0], lastData[1], lastData[2], lastData[3]);
       });
   }
 
@@ -673,11 +530,6 @@ ${reorderLiveRegionHtml}
       .catch(function(e) { opFailed(e, 'Could not reach the server'); });
   }
 
-  function forgetToken() {
-    setStoredToken('');
-    showLoginScreen();
-  }
-
   /* ==== Event delegation ==== */
   document.addEventListener('click', function(e) {
     var t = e.target.closest('[data-action]');
@@ -701,19 +553,16 @@ ${reorderLiveRegionHtml}
     else if (a === 'token-reveal') revealToken(t.getAttribute('data-profile'));
     else if (a === 'token-regenerate') regenerateToken(t.getAttribute('data-profile'));
     else if (a === 'token-revoke') revokeToken(t.getAttribute('data-profile'));
-    else if (a === 'forget') forgetToken();
   });
 
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && e.target.id === 'tokenInput') { e.preventDefault(); submitToken(); }
     if (e.key === 'Enter' && e.target.id === 'login-code') { e.preventDefault(); completeLogin(); }
     if (e.key === 'Enter' && e.target.id === 'rename-input') { e.preventDefault(); saveRename(e.target.value.trim()); }
     if (e.key === 'Enter' && e.target.id === 'add-id') { e.preventDefault(); doAdd(); }
     if (e.key === 'Enter' && e.target.id === 'add-token') { e.preventDefault(); doAdd(); }
   });
 
-  /* Start bootstrap */
-  bootstrap();
+  refresh();
 
   ${profileBarJs}
 </script>

@@ -1,164 +1,166 @@
 /**
- * Per-profile Token auth audit.
+ * Auth boundary: model routes are gated, the dashboard is not.
  *
- * With the new per-profile Token system (replacing MERIDIAN_API_KEY), every
- * dashboard/mutation route requires a valid Token from any profile. Model
- * routes require a Token from the specific profile being accessed.
- *
- * This test verifies that all non-public routes are gated by the dashboard
- * auth middleware when at least one profile has an accessKey.
+ * The dashboard (pages, telemetry, metrics, profile/settings/plugin
+ * management) is expected to sit behind a firewall, so it carries no sign-in
+ * and needs no Token even when profiles have accessKeys. Token auth applies to
+ * the model endpoints only (/v1/*, /messages, /design-login).
  */
-import { describe, it, expect, beforeAll, afterAll } from "bun:test"
+import { describe, it, expect } from "bun:test"
 import type { ProfileConfig } from "../proxy/profiles"
 
 const { mintToken } = await import("../proxy/profileKeys")
 const { createProxyServer } = await import("../proxy/server")
 
-describe("Per-profile Token auth — /settings/api/* and all dashboard routes", () => {
-  let token: string
-  let profiles: ProfileConfig[]
+function gatedServer() {
+  const token = mintToken()
+  const profiles: ProfileConfig[] = [{ id: "test", type: "claude-max", accessKey: token }]
+  const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
+  return { app, token }
+}
 
-  beforeAll(() => {
-    token = mintToken()
-    profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+describe("dashboard is open when profiles have accessKeys", () => {
+  it("serves every page without a Token", async () => {
+    const { app } = gatedServer()
+    for (const page of ["/", "/telemetry", "/profiles", "/providers", "/settings", "/plugins", "/telemetry/icon.svg"]) {
+      const res = await app.fetch(new Request(`http://localhost${page}`, { headers: { accept: "text/html" } }))
+      expect(res.status, page).toBe(200)
+    }
   })
 
-  it("rejects GET /settings/api/features without Token", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-    const res = await app.fetch(new Request("http://localhost/settings/api/features"))
-    expect(res.status).toBe(401)
+  it("serves every data endpoint the pages fetch without a Token", async () => {
+    const { app } = gatedServer()
+    for (const path of [
+      "/telemetry/summary",
+      "/telemetry/requests",
+      "/telemetry/logs",
+      "/profiles/list",
+      "/profiles/health",
+      "/providers/view",
+      "/settings/api/features",
+      "/settings/api/routing",
+      "/settings/api/telemetry",
+      "/settings/api/pricing",
+      "/plugins/list",
+      "/metrics",
+      "/v1/usage/quota/all",
+      "/v1/usage/quota",
+    ]) {
+      const res = await app.fetch(new Request(`http://localhost${path}`))
+      expect(res.status, path).not.toBe(401)
+    }
   })
 
-  it("rejects PATCH /settings/api/features/:adapter without Token", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-    const res = await app.fetch(new Request("http://localhost/settings/api/features/opencode", {
+  it("lets dashboard mutations through without a Token", async () => {
+    const { app } = gatedServer()
+    const patch = await app.fetch(new Request("http://localhost/settings/api/features/opencode", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sharedMemory: true }),
     }))
-    expect(res.status).toBe(401)
+    expect(patch.status).not.toBe(401)
+    const del = await app.fetch(new Request("http://localhost/settings/api/features/opencode", { method: "DELETE" }))
+    expect(del.status).not.toBe(401)
+    const login = await app.fetch(new Request("http://localhost/auth/claude/start?profile=test"))
+    expect(login.status).not.toBe(401)
   })
 
-  it("rejects DELETE /settings/api/features/:adapter without Token", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-    const res = await app.fetch(new Request("http://localhost/settings/api/features/opencode", {
-      method: "DELETE",
-    }))
-    expect(res.status).toBe(401)
-  })
-
-  it("serves GET /settings (HTML shell) without Token — data stays gated", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-    const res = await app.fetch(new Request("http://localhost/settings"))
-    // The shell must load so browser navigation works once the tab holds a
-    // Token (sessionStorage → x-api-key); gating it 401s the page itself with
-    // raw authentication_error JSON before any JS can attach the key.
+  it("still works when a Token is sent anyway", async () => {
+    const { app, token } = gatedServer()
+    const res = await app.fetch(new Request("http://localhost/settings/api/features", { headers: { "x-api-key": token } }))
     expect(res.status).toBe(200)
-    expect(res.headers.get("content-type")).toContain("text/html")
   })
 
-  it("serves every HTML shell without Token while its JSON stays gated", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-    for (const shell of ["/telemetry", "/profiles", "/providers", "/settings", "/plugins", "/telemetry/icon.svg"]) {
-      const res = await app.fetch(new Request(`http://localhost${shell}`))
-      expect(res.status).toBe(200)
+  it("is open when only the global MERIDIAN_API_KEY is configured", async () => {
+    const previous = process.env.MERIDIAN_API_KEY
+    process.env.MERIDIAN_API_KEY = "global-secret"
+    try {
+      const { app } = createProxyServer({ port: 0, host: "127.0.0.1" })
+      for (const path of ["/telemetry/summary", "/profiles/list", "/settings/api/features", "/v1/usage/quota/all"]) {
+        const res = await app.fetch(new Request(`http://localhost${path}`))
+        expect(res.status, path).not.toBe(401)
+      }
+      const model = await app.fetch(new Request("http://localhost/v1/models"))
+      expect(model.status).toBe(401)
+    } finally {
+      if (previous === undefined) delete process.env.MERIDIAN_API_KEY
+      else process.env.MERIDIAN_API_KEY = previous
     }
-    for (const gated of ["/telemetry/summary", "/profiles/list", "/providers/view", "/settings/api/features", "/plugins/list"]) {
-      const res = await app.fetch(new Request(`http://localhost${gated}`))
-      expect(res.status).toBe(401)
-    }
-  })
-
-  it("accepts GET /settings/api/features with matching Token", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-    const res = await app.fetch(new Request("http://localhost/settings/api/features", {
-      headers: { "x-api-key": token },
-    }))
-    expect(res.status).toBe(200)
-    const body = await res.json() as Record<string, unknown>
-    expect(typeof body).toBe("object")
-  })
-
-  it("accepts GET /settings/api/features with matching Bearer token", async () => {
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-    const res = await app.fetch(new Request("http://localhost/settings/api/features", {
-      headers: { "authorization": `Bearer ${token}` },
-    }))
-    expect(res.status).toBe(200)
   })
 })
 
-// ---------------------------------------------------------------------------
-// Audit: any sensitive route added in the future must go through dashboardAuth.
-// ---------------------------------------------------------------------------
-describe("auth audit: every registered prefix is protected when profiles have accessKeys", () => {
-  // Routes that are intentionally public. They serve read-only,
-  // non-sensitive content (landing page; auth status; the two probes), plus
-  // the full-page HTML shells: public so browser navigation works once the
-  // tab holds a Token, with every data endpoint behind them still gated.
-  const PUBLIC_PREFIXES = new Set([
-    "/",
-    "/health",
-    "/livez",
-    "/readyz",
-    "/telemetry",
-    "/telemetry/icon.svg",
-    "/profiles",
-    "/providers",
-    "/settings",
-    "/plugins",
-  ])
-
-  it("rejects unauthenticated requests to every non-public route prefix", async () => {
-    const token = mintToken()
-    const profiles: ProfileConfig[] = [{ id: "test", type: "claude-max", accessKey: token }]
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-
-    const routes = (app as unknown as { routes: Array<{ method: string; path: string }> }).routes
-    const prefixes = new Set<string>()
-    for (const r of routes) {
-      if (r.method === "ALL") continue
-      const probePath = r.path.replace(/:\w+/g, "x")
-      prefixes.add(probePath)
-    }
-
-    const failures: string[] = []
-    for (const path of prefixes) {
-      if (PUBLIC_PREFIXES.has(path)) continue
-      const res = await app.fetch(new Request(`http://localhost${path}`))
-      if (res.status !== 401) {
-        failures.push(`${path} returned ${res.status} (expected 401 — not protected by dashboardAuth)`)
-      }
-    }
-
-    expect(failures).toEqual([])
-  })
-
-  it("model route /v1/messages requires Token", async () => {
-    const token = mintToken()
-    const profiles: ProfileConfig[] = [{ id: "test", type: "claude-max", accessKey: token }]
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-
+describe("model routes keep their Token auth", () => {
+  it("/v1/messages requires a Token", async () => {
+    const { app } = gatedServer()
     const res = await app.fetch(new Request("http://localhost/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: "sonnet", messages: [{ role: "user", content: "hi" }], max_tokens: 100 }),
     }))
-    // /v1/messages requires model auth which also needs a Token
     expect(res.status).toBe(401)
   })
 
-  it("model route /v1/messages accepts valid Token from matching profile", async () => {
-    const token = mintToken()
-    const profiles: ProfileConfig[] = [{ id: "test", type: "claude-max", accessKey: token }]
-    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
-
-    // This will fail with 503 (no real SDK) but should NOT be 401
+  it("/v1/messages accepts a valid Token from the matching profile", async () => {
+    const { app, token } = gatedServer()
+    // Fails downstream (no real SDK) but must not be rejected as unauthenticated.
     const res = await app.fetch(new Request("http://localhost/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": token },
       body: JSON.stringify({ model: "sonnet", messages: [{ role: "user", content: "hi" }], max_tokens: 100 }),
     }))
     expect(res.status).not.toBe(401)
+  })
+
+  it("rejects a wrong Token on a model route", async () => {
+    const { app } = gatedServer()
+    const res = await app.fetch(new Request("http://localhost/v1/models", { headers: { "x-api-key": mintToken() } }))
+    expect(res.status).toBe(401)
+  })
+
+  it("the dashboard usage-feed exemption does not cover other /v1 routes or methods", async () => {
+    const { app } = gatedServer()
+    for (const [method, path] of [
+      ["GET", "/v1/models"],
+      ["GET", "/v1/sessions/recover"],
+      ["POST", "/v1/usage/quota/all"],
+      ["POST", "/v1/chat/completions"],
+      ["POST", "/messages"],
+      ["GET", "/design-login"],
+    ] as const) {
+      const res = await app.fetch(new Request(`http://localhost${path}`, { method }))
+      expect(res.status, `${method} ${path}`).toBe(401)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Audit: every registered route is either a model route (401 without a Token)
+// or part of the open dashboard (never 401). A new route that lands on the
+// wrong side of that line fails here.
+// ---------------------------------------------------------------------------
+describe("auth audit: model routes are gated, everything else is open", () => {
+  const DASHBOARD_V1_READS = new Set(["/v1/usage/quota", "/v1/usage/quota/all"])
+  const isModelRoute = (path: string) =>
+    (path.startsWith("/v1/") && !DASHBOARD_V1_READS.has(path)) || path === "/messages" || path === "/design-login"
+
+  it("gates exactly the model routes", async () => {
+    const { app } = gatedServer()
+
+    const routes = (app as unknown as { routes: Array<{ method: string; path: string }> }).routes
+    const paths = new Set<string>()
+    for (const r of routes) {
+      if (r.method === "ALL") continue
+      paths.add(r.path.replace(/:\w+/g, "x"))
+    }
+
+    const failures: string[] = []
+    for (const path of paths) {
+      const res = await app.fetch(new Request(`http://localhost${path}`))
+      const gated = res.status === 401
+      if (isModelRoute(path) && !gated) failures.push(`${path} returned ${res.status} (model route must be gated)`)
+      if (!isModelRoute(path) && gated) failures.push(`${path} returned 401 (dashboard route must be open)`)
+    }
+
+    expect(failures).toEqual([])
   })
 })

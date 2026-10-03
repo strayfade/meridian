@@ -1,12 +1,15 @@
 /**
- * API key authentication middleware.
+ * API key authentication middleware for the MODEL routes.
  *
  * Two accepted credentials (either grants access):
- * - Per-profile Token (mrd_...) from profiles.json accessKey.
- * - Global MERIDIAN_API_KEY (legacy shared secret, still honored).
- * - Model routes (/v1/*): per-profile Token selects its profile (no header
- *   needed); the global key grants access without pinning a profile.
- * - Dashboard/mutation routes: any valid credential grants access.
+ * - Per-profile Token (mrd_...) from profiles.json accessKey: selects its
+ *   profile (no x-meridian-profile header needed).
+ * - Global MERIDIAN_API_KEY (legacy shared secret, still honored): grants
+ *   access without pinning a profile.
+ *
+ * The dashboard (pages, telemetry, profile/settings/plugin management) is not
+ * authenticated; it is expected to sit behind a firewall. Only model routes
+ * (/v1/*, /messages, /design-login, and the Antigravity sub-app) use this.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto"
@@ -111,43 +114,5 @@ export async function requireModelAuth(
   }
 
   c.set("tokenProfileId", matched.id)
-  return next()
-}
-
-/**
- * Dashboard/mutation auth: any valid Token grants access.
- * Does not select profile — just validates.
- */
-export async function requireDashboardAuth(
-  c: Context,
-  next: Next,
-  profiles: ProfileConfig[]
-): Promise<Response | void> {
-  const configured = getConfiguredKey()
-  if (!anyProfileHasKey(profiles) && !configured) return next()
-
-  const provided = extractToken(c)
-  if (provided && configured && safeCompare(provided, configured)) return next()
-  if (!provided || !provided.startsWith(TOKEN_PREFIX)) {
-    return c.json({
-      type: "error",
-      error: {
-        type: "authentication_error",
-        message: "Invalid or missing Token",
-      },
-    }, 401)
-  }
-
-  const matched = findProfileByToken(provided, profiles)
-  if (!matched) {
-    return c.json({
-      type: "error",
-      error: {
-        type: "authentication_error",
-        message: "Invalid or missing Token",
-      },
-    }, 401)
-  }
-
   return next()
 }

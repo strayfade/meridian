@@ -267,8 +267,7 @@ window.meridianReorder = (function () {
   function save(order, message) {
     var previous = state.order;
     state.order = order;
-    const apiFetch = window.meridianApiFetch || fetch;
-    return apiFetch('/settings/api/routing', {
+    return fetch('/settings/api/routing', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ profileOrder: order })

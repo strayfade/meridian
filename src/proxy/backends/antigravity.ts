@@ -15,6 +15,13 @@ import type { ProfileConfig } from "../profiles"
 import { AntigravityRuntime, type AntigravityRun } from "./antigravityRuntime"
 import { AntigravityError, forcedAgTool, toolChoiceInstruction, blocks, contractKey, historyKey, sameAgExecutionContract, parseAgRequest, type AgBlock, type AgResult, type AgRequest } from "./antigravityProtocol"
 
+/** GET routes that feed the dashboard pages. Not authenticated; see fetch(). */
+const AG_DASHBOARD_READS = new Set([
+  '/', '/providers', '/providers/status', '/providers/view',
+  '/telemetry/native-tools', '/telemetry/requests', '/telemetry/summary', '/telemetry/logs',
+  '/v1/usage/quota/all', '/profiles/list', '/plugins/list', '/settings/api/features',
+])
+
 function errorResponse(error: unknown): Response {
   const e = error instanceof AntigravityError ? error : new AntigravityError(error instanceof Error ? error.message : String(error), 503, "api_error")
   return Response.json({ type: "error", error: { type: e.type, message: e.message } }, { status: e.status, headers: e.retryAfter ? { "retry-after": String(e.retryAfter) } : {} })
@@ -295,7 +302,10 @@ export function createAntigravityServer(
     const profiles = getProfiles()
     try {
       const path = new URL(request.url).pathname
-      if (!["/health", "/readyz", "/livez"].includes(path) && !hasValidToken(request.headers, profiles)) throw new AntigravityError("Invalid or missing Token", 401, "authentication_error")
+      // Dashboard pages and their read-only data feeds are unauthenticated (the
+      // dashboard sits behind a firewall); only model routes require a Token.
+      const dashboardRead = request.method === 'GET' && AG_DASHBOARD_READS.has(path)
+      if (!dashboardRead && !["/health", "/readyz", "/livez"].includes(path) && !hasValidToken(request.headers, profiles)) throw new AntigravityError("Invalid or missing Token", 401, "authentication_error")
       if (request.method === 'GET' && ['/', '/providers'].includes(path)) return new Response(providerPageHtml, { headers: { 'content-type': 'text/html; charset=utf-8' } })
       if (request.method === 'GET' && ['/providers/status', '/providers/view'].includes(path)) {
         const data = providerSnapshot([disabledProvider('claude'), await providerStatus()])

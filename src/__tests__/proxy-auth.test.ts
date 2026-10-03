@@ -34,21 +34,17 @@ describe("Per-profile Token authentication", () => {
   }
 
   it("allows requests when no profile has an accessKey", async () => {
-    const { requireDashboardAuth, requireModelAuth } = await import("../proxy/auth")
+    const { requireModelAuth } = await import("../proxy/auth")
 
     let nextCalled = false
     const ctx = mockContext({})
 
-    await requireDashboardAuth(ctx, async () => { nextCalled = true }, [])
-    expect(nextCalled).toBe(true)
-
-    nextCalled = false
     await requireModelAuth(ctx, async () => { nextCalled = true }, [])
     expect(nextCalled).toBe(true)
   })
 
-  it("rejects requests with missing Token when profiles have accessKey", async () => {
-    const { requireDashboardAuth } = await import("../proxy/auth")
+  it("model route rejects a missing Token when profiles have accessKey", async () => {
+    const { requireModelAuth } = await import("../proxy/auth")
 
     let responseSent = false
     let responseStatus = 0
@@ -58,13 +54,13 @@ describe("Per-profile Token authentication", () => {
     }
 
     const profiles = [{ id: "test", type: "claude-max", accessKey: "mrd_test123" }] as any
-    await requireDashboardAuth(ctx as any, async () => {}, profiles)
+    await requireModelAuth(ctx as any, async () => {}, profiles)
     expect(responseSent).toBe(true)
     expect(responseStatus).toBe(401)
   })
 
-  it("accepts valid Token for dashboard routes", async () => {
-    const { requireDashboardAuth } = await import("../proxy/auth")
+  it("model route accepts a valid Token", async () => {
+    const { requireModelAuth } = await import("../proxy/auth")
     const { mintToken } = await import("../proxy/profileKeys")
 
     let nextCalled = false
@@ -72,12 +68,12 @@ describe("Per-profile Token authentication", () => {
     const ctx = mockContext({ "x-api-key": token })
 
     const profiles = [{ id: "test", type: "claude-max", accessKey: token }] as any
-    await requireDashboardAuth(ctx as any, async () => { nextCalled = true }, profiles)
+    await requireModelAuth(ctx as any, async () => { nextCalled = true }, profiles)
     expect(nextCalled).toBe(true)
   })
 
-  it("rejects invalid Token", async () => {
-    const { requireDashboardAuth } = await import("../proxy/auth")
+  it("model route rejects an invalid Token", async () => {
+    const { requireModelAuth } = await import("../proxy/auth")
 
     let responseSent = false
     let responseStatus = 0
@@ -87,11 +83,19 @@ describe("Per-profile Token authentication", () => {
     }
 
     const profiles = [{ id: "test", type: "claude-max", accessKey: "mrd_validtoken123456789012345678901234" }] as any
-    await requireDashboardAuth(ctx as any, async () => {}, profiles)
+    await requireModelAuth(ctx as any, async () => {}, profiles)
     expect(responseSent).toBe(true)
     expect(responseStatus).toBe(401)
   })
 
+  it("the global MERIDIAN_API_KEY is still honored on model routes", async () => {
+    const { requireModelAuth } = await import("../proxy/auth")
+    process.env.MERIDIAN_API_KEY = "shared-secret"
+
+    let nextCalled = false
+    await requireModelAuth(mockContext({ "x-api-key": "shared-secret" }), async () => { nextCalled = true }, [])
+    expect(nextCalled).toBe(true)
+  })
   it("extracts Token from x-api-key header", async () => {
     const { extractToken } = await import("../proxy/auth")
 

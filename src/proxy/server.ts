@@ -91,7 +91,7 @@ import { translateResponsesToAnthropic, translateAnthropicToResponses, createRes
 import { flattenAssistantContent, normalizeStructuredUserContent, replayToolResultHeader, frameStructuredReplay, coalesceStructuredUserMessages } from "./replay"
 import { unstreamedAssistantBlockFrames } from "./unstreamedAssistant"
 import { extractAdvisorModel, extractSystemText, getLastUserMessage, stripAdvisorTools, stripNonStandardStreamFields, MULTIMODAL_TYPES, buildToolUseIndex, frameReplayTurns } from "./messages"
-import { requireModelAuth, requireDashboardAuth, tokenAuthEnabled, extractToken } from "./auth"
+import { requireModelAuth } from "./auth"
 import { detectAdapter } from "./adapters/detect"
 import { buildQueryOptions, resolveQueryConfigDir, singleTurnCapLiftRaisesBudget, type QueryContext } from "./query"
 import { normalizeEffort } from "./effort"
@@ -970,51 +970,35 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
   app.use("*", cors())
 
-  // Per-profile Token auth — protects routes when any profile has an accessKey.
-  // Model routes (/v1/*, /messages): Token selects its profile.
-  // Dashboard/mutation routes: any valid Token grants access.
+  // Token auth applies to the MODEL surface only (when any profile has an
+  // accessKey, or MERIDIAN_API_KEY is set): /v1/*, /messages and /design-login.
+  // Per-profile Token selects its profile; the global key grants access.
+  //
+  // The dashboard — every page and every data endpoint behind it (/telemetry,
+  // /metrics, /profiles, /plugins, /settings, /providers, /auth/*, and the
+  // read-only /v1/usage/quota* feeds) — is deliberately NOT authenticated.
+  // It is intended to sit behind a firewall/reverse proxy that owns access
+  // control, so the pages carry no sign-in and the browser attaches no key.
+  // The Antigravity sub-app keeps its own gate for its model routes.
   const modelAuth = (c: Context, next: Next) =>
     requireModelAuth(c, next, getEffectiveProfiles(finalConfig.profiles), c.req.header("x-meridian-profile")?.trim())
-  // Full-page HTML shells stay public so browser navigation works: the Token
-  // lives tab-side (sessionStorage) and plain navigation carries no key, so
-  // gating the shell itself 401s the page with raw authentication_error JSON
-  // before any JS can attach it. Only the JSON/data endpoints behind the
-  // shells require the Token — each page fetches them via meridianApiFetch.
-  const PUBLIC_HTML_SHELLS = new Set([
-    "/telemetry",
-    "/telemetry/",
-    "/telemetry/icon.svg",
-    "/profiles",
-    "/providers",
-    "/settings",
-    "/plugins",
-  ])
-  const dashboardAuth = (c: Context, next: Next) => {
+  // Read-only usage feeds that live under /v1/ but are consumed by the
+  // dashboard (home and profiles pages), so they follow the dashboard's rule.
+  const DASHBOARD_V1_READS = new Set(["/v1/usage/quota", "/v1/usage/quota/all"])
+  const modelRouteAuth = (c: Context, next: Next) => {
     if (c.req.method === "GET") {
       try {
-        if (PUBLIC_HTML_SHELLS.has(new URL(c.req.url).pathname)) return next()
+        if (DASHBOARD_V1_READS.has(new URL(c.req.url).pathname)) return next()
       } catch {
         // Unparseable URL — fall through to auth rather than bypassing it.
       }
     }
-    return requireDashboardAuth(c, next, getEffectiveProfiles(finalConfig.profiles))
+    return modelAuth(c, next)
   }
 
-  app.use("/v1/*", modelAuth)
+  app.use("/v1/*", modelRouteAuth)
   app.use("/messages", modelAuth)
-  app.use("/telemetry/*", dashboardAuth)
-  app.use("/telemetry", dashboardAuth)
-  app.use("/metrics", dashboardAuth)
-  app.use("/profiles/*", dashboardAuth)
-  app.use("/profiles", dashboardAuth)
-  app.use("/plugins/*", dashboardAuth)
-  app.use("/plugins", dashboardAuth)
-  app.use("/settings/*", dashboardAuth)
-  app.use("/settings", dashboardAuth)
-  app.use("/design-login", dashboardAuth)
-  app.use("/providers", dashboardAuth)
-  app.use("/providers/*", dashboardAuth)
-  app.use("/antigravity/*", dashboardAuth)
+  app.use("/design-login", modelAuth)
 
   // Separate provider routes; Claude retains all existing paths and semantics.
   app.all('/antigravity/*', c => {
@@ -1489,8 +1473,6 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
       headers: { "content-type": "application/json", ...retryAfterHeaders(poolRetryAfter) },
     })
   }
-
-  app.use("/auth/*", dashboardAuth)
 
   app.get("/", (c) => {
     // API clients get JSON, browsers get the landing page
@@ -8455,10 +8437,8 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   // Browser equivalents of `meridian profile add|login|remove`: the dashboard
   // starts a PKCE login (link shown to the user), completes it with a pasted
   // code, and adds/removes profile entries on disk. All logic lives in
-  // ./profileWeb; these routes only wire HTTP. They sit under the /profiles/*
-  // and /auth/* prefixes, so requireAuth gates them whenever MERIDIAN_API_KEY
-  // is set — starting or completing a login writes credentials, which must
-  // never be reachable without the API key.
+  // ./profileWeb; these routes only wire HTTP. Like every dashboard route they
+  // are unauthenticated: the dashboard is expected to sit behind a firewall.
   const profileWebLogin = createProfileWebLogin({})
 
   app.get("/auth/claude/start", (c) => {

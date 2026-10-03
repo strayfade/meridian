@@ -174,25 +174,17 @@ function setLogFilter(filter) {
 async function refresh() {
   const w = $('#window').value;
   try {
-    const apiFetch = window.meridianApiFetch || fetch;
     const responses = await Promise.all([
-      apiFetch('/telemetry/summary?window=' + w),
-      apiFetch('/telemetry/requests?limit=50&since=' + (Date.now() - Number(w))),
-      apiFetch('/telemetry/logs?limit=200&since=' + (Date.now() - Number(w))),
-      apiFetch('/telemetry/routes?window=' + w),
+      fetch('/telemetry/summary?window=' + w),
+      fetch('/telemetry/requests?limit=50&since=' + (Date.now() - Number(w))),
+      fetch('/telemetry/logs?limit=200&since=' + (Date.now() - Number(w))),
+      fetch('/telemetry/routes?window=' + w),
       // Lives on the proxy app, not under /telemetry, so it is absent when the
       // telemetry routes are mounted standalone. The accounts table degrades to
       // "no live state known" rather than failing the whole refresh.
-      apiFetch('/profiles/health').catch(function() { return null; }),
-      apiFetch('/telemetry/retention'),
+      fetch('/profiles/health').catch(function() { return null; }),
+      fetch('/telemetry/retention'),
     ]);
-    // The shell is public but the data endpoints are not: without a Token
-    // (stored tab-side on the home page) every one 401s. Say so with a way
-    // back instead of rendering undefined metrics.
-    if (responses.some(function(r) { return r && r.status === 401; })) {
-      $('#content').innerHTML = '<div class="empty">Dashboard locked — <a href="/" style="color:var(--accent)">sign in from Home</a>, then reload.</div>';
-      return;
-    }
     const [summary, reqs, logs, routes, health, retention] = await Promise.all(
       responses.map(function(r) { return r ? r.json() : null; })
     );

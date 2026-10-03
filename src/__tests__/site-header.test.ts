@@ -189,22 +189,39 @@ describe("design-system conformance (DESIGN.md)", () => {
   })
 })
 
-describe("dashboard API-key helper (profileBarJs)", () => {
-  test("shared fetch wrapper attaches the tab-scoped key", () => {
-    expect(profileBarJs).toContain("meridianApiFetch")
-    expect(profileBarJs).toContain("meridian.apiKey")
-    expect(profileBarJs).toContain("sessionStorage")
-    expect(profileBarJs).toContain("x-api-key")
+describe("dashboard has no frontend auth", () => {
+  test("the shared header attaches no credentials and keeps no key", () => {
+    expect(profileBarJs).not.toContain("meridianApiFetch")
+    expect(profileBarJs).not.toContain("meridian.apiKey")
+    expect(profileBarJs).not.toContain("sessionStorage")
+    expect(profileBarJs).not.toContain("x-api-key")
   })
 
-  test("the header chip uses the wrapper so it works once unlocked", () => {
-    expect(profileBarJs).toContain("meridianApiFetch('/profiles/list')")
+  test("the header chip fetches the profile list directly", () => {
+    expect(profileBarJs).toContain("fetch('/profiles/list')")
+  })
+
+  test("no page renders a sign-in screen or a locked state", async () => {
+    const sources = [
+      "src/telemetry/landing.ts",
+      "src/telemetry/dashboard.ts",
+      "src/telemetry/settingsPage.ts",
+      "src/telemetry/profilePage.ts",
+      "src/telemetry/providerPage.ts",
+      "src/telemetry/profileOrder.ts",
+      "src/proxy/plugins/pluginPage.ts",
+    ]
+    for (const path of sources) {
+      const src = await Bun.file(path).text()
+      for (const banned of ["Dashboard locked", "meridianApiFetch", "loginScreen", "id=\"tokenInput\"", "submitToken", "sessionStorage", "res.status === 401", "r.status === 401"]) {
+        expect(src.includes(banned), `${path} must not contain "${banned}"`).toBe(false)
+      }
+    }
   })
 })
 
 describe("landing account management", () => {
-  test("unlock card, login flow, and profile mutations are wired", () => {
-    expect(landingHtml).toContain("Dashboard locked")
+  test("login flow and profile mutations are wired", () => {
     expect(landingHtml).toContain("/auth/claude/start")
     expect(landingHtml).toContain("/auth/claude/exchange")
     expect(landingHtml).toContain("/auth/refresh")
@@ -219,9 +236,11 @@ describe("landing account management", () => {
     expect(landingHtml).toContain("handleAction")
   })
 
-  test("a 401 renders the unlock card, not undefined metrics", () => {
-    expect(landingHtml).toContain("markLocked")
-    expect(landingHtml).toContain("keyLocked")
+  test("the page loads its data directly, with no sign-in gate", () => {
+    expect(landingHtml).not.toContain("Sign in")
+    expect(landingHtml).not.toContain("markLocked")
+    expect(landingHtml).toContain("/telemetry/summary")
+    expect(landingHtml).toContain("/v1/usage/quota/all")
   })
 })
 

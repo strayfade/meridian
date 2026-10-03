@@ -241,21 +241,15 @@ let currentConfig = {};
 let selectedAdapter = null;
 
 async function loadConfig() {
-  const apiFetch = window.meridianApiFetch || fetch;
-  const res = await apiFetch('/settings/api/features');
-  if (res.status === 401) {
-    document.getElementById('adapters').innerHTML = '<div style="color:var(--muted);padding:24px;text-align:center">Dashboard locked — sign in from the <a href="/" style="color:var(--accent)">home page</a>, then reload.</div>';
-    return;
-  }
+  const res = await fetch('/settings/api/features');
   currentConfig = await res.json();
   render();
 }
 
 async function saveFeature(adapter, key, value) {
-  const apiFetch = window.meridianApiFetch || fetch;
   const patch = {};
   patch[key] = value;
-  await apiFetch('/settings/api/features/' + adapter, {
+  await fetch('/settings/api/features/' + adapter, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
@@ -265,8 +259,7 @@ async function saveFeature(adapter, key, value) {
 }
 
 async function resetAdapter(adapter) {
-  const apiFetch = window.meridianApiFetch || fetch;
-  await apiFetch('/settings/api/features/' + adapter, { method: 'DELETE' });
+  await fetch('/settings/api/features/' + adapter, { method: 'DELETE' });
   await loadConfig();
   showSaved();
 }
@@ -391,16 +384,13 @@ let pricingData = { builtin: {}, overrides: {} };
 function fmtRate(v) { return String(Math.round(v * 10000) / 10000); }
 
 async function loadPricing() {
-  const apiFetch = window.meridianApiFetch || fetch;
-  const res = await apiFetch('/settings/api/pricing');
-  if (res.status === 401) return;
+  const res = await fetch('/settings/api/pricing');
   pricingData = await res.json();
   renderPricing();
 }
 
 async function putPricing(model, rates) {
-  const apiFetch = window.meridianApiFetch || fetch;
-  const res = await apiFetch('/settings/api/pricing/' + encodeURIComponent(model), {
+  const res = await fetch('/settings/api/pricing/' + encodeURIComponent(model), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(rates),
@@ -415,8 +405,7 @@ async function putPricing(model, rates) {
 }
 
 async function removePricing(model) {
-  const apiFetch = window.meridianApiFetch || fetch;
-  await apiFetch('/settings/api/pricing/' + encodeURIComponent(model), { method: 'DELETE' });
+  await fetch('/settings/api/pricing/' + encodeURIComponent(model), { method: 'DELETE' });
   showSaved();
   await loadPricing();
 }
@@ -509,12 +498,7 @@ async function addPricingModel() {
 }
 
 async function loadRouting() {
-  const apiFetch = window.meridianApiFetch || fetch;
-  const res = await apiFetch('/settings/api/routing');
-  if (res.status === 401) {
-    document.getElementById('routing-body').innerHTML = '<div style="color:var(--muted);padding:12px;text-align:center">Dashboard locked — sign in from the <a href="/" style="color:var(--accent)">home page</a>.</div>';
-    return;
-  }
+  const res = await fetch('/settings/api/routing');
   const cfg = await res.json();
   const el = document.getElementById('routing-body');
   const envNote = (on) => on ? ' <span style="font-size:11px;color:var(--yellow)">(env override active — setting saved but env wins)</span>' : '';
@@ -540,7 +524,7 @@ async function loadRouting() {
     + '</ol></div>';
   el.innerHTML = h;
   document.getElementById('routing-mode').addEventListener('change', async (e) => {
-    await apiFetch('/settings/api/routing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routing: e.target.value }) });
+    await fetch('/settings/api/routing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routing: e.target.value }) });
     await loadRouting();
   });
   el.querySelectorAll('button[data-move]').forEach(btn => btn.addEventListener('click', async () => {
@@ -548,7 +532,7 @@ async function loadRouting() {
     const j = btn.dataset.move === 'up' ? i - 1 : i + 1;
     const order = cfg.profileOrder.slice();
     const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
-    await apiFetch('/settings/api/routing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profileOrder: order }) });
+    await fetch('/settings/api/routing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profileOrder: order }) });
     await loadRouting();
   }));
 }
@@ -580,12 +564,7 @@ function telemetryRow(label, control, effective, note) {
 }
 
 async function loadTelemetry() {
-  const apiFetch = window.meridianApiFetch || fetch;
-  const res = await apiFetch('/settings/api/telemetry');
-  if (res.status === 401) {
-    document.getElementById('telemetry-body').innerHTML = '<div style="color:var(--muted);padding:12px;text-align:center">Dashboard locked — sign in from the <a href="/" style="color:var(--accent)">home page</a>.</div>';
-    return;
-  }
+  const res = await fetch('/settings/api/telemetry');
   const cfg = await res.json();
   const el = document.getElementById('telemetry-body');
   const live = cfg.effective || {};
@@ -668,8 +647,7 @@ async function loadTelemetry() {
 }
 
 async function putTelemetry(body) {
-  const apiFetch = window.meridianApiFetch || fetch;
-  const res = await apiFetch('/settings/api/telemetry', {
+  const res = await fetch('/settings/api/telemetry', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

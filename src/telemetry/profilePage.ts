@@ -313,8 +313,7 @@ async function commitRename(from) {
   if (!to || to === from) { cancelRename(); return; }
   var data;
   try {
-    const apiFetch = window.meridianApiFetch || fetch;
-    var res = await apiFetch('/profiles/rename', {
+    var res = await fetch('/profiles/rename', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: from, to: to })
@@ -338,20 +337,12 @@ async function commitRename(from) {
 async function refresh() {
   if (editingProfile) return;
   try {
-    const apiFetch = window.meridianApiFetch || fetch;
     var [profilesRes, quotaRes, routingRes] = await Promise.all([
-      apiFetch('/profiles/list'),
-      apiFetch('/v1/usage/quota/all').catch(function () { return null; }),
-      apiFetch('/settings/api/routing').catch(function () { return null; }),
+      fetch('/profiles/list'),
+      fetch('/v1/usage/quota/all').catch(function () { return null; }),
+      fetch('/settings/api/routing').catch(function () { return null; }),
     ]);
     var profiles = null;
-    if (profilesRes.status === 401) {
-      document.getElementById('content').innerHTML = '<div class="empty-state">'
-        + '<h2>Dashboard locked</h2>'
-        + '<p style="margin-top:8px">Sign in from the <a href="/" style="color:var(--accent)">home page</a>, then reload.</p>'
-        + '</div>';
-      return;
-    }
     try { profiles = await profilesRes.json(); } catch (_) { profiles = null; }
     if (!profiles || profiles.type === 'error') { throw new Error('load failed'); }
     var quota = null;
@@ -648,8 +639,7 @@ function copyCmd(btn) {
 }
 
 async function switchProfile(id) {
-  const apiFetch = window.meridianApiFetch || fetch;
-  const res = await apiFetch('/profiles/active', {
+  const res = await fetch('/profiles/active', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ profile: id })
