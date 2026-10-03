@@ -975,8 +975,30 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   // Dashboard/mutation routes: any valid Token grants access.
   const modelAuth = (c: Context, next: Next) =>
     requireModelAuth(c, next, getEffectiveProfiles(finalConfig.profiles), c.req.header("x-meridian-profile")?.trim())
-  const dashboardAuth = (c: Context, next: Next) =>
-    requireDashboardAuth(c, next, getEffectiveProfiles(finalConfig.profiles))
+  // Full-page HTML shells stay public so browser navigation works: the Token
+  // lives tab-side (sessionStorage) and plain navigation carries no key, so
+  // gating the shell itself 401s the page with raw authentication_error JSON
+  // before any JS can attach it. Only the JSON/data endpoints behind the
+  // shells require the Token — each page fetches them via meridianApiFetch.
+  const PUBLIC_HTML_SHELLS = new Set([
+    "/telemetry",
+    "/telemetry/",
+    "/telemetry/icon.svg",
+    "/profiles",
+    "/providers",
+    "/settings",
+    "/plugins",
+  ])
+  const dashboardAuth = (c: Context, next: Next) => {
+    if (c.req.method === "GET") {
+      try {
+        if (PUBLIC_HTML_SHELLS.has(new URL(c.req.url).pathname)) return next()
+      } catch {
+        // Unparseable URL — fall through to auth rather than bypassing it.
+      }
+    }
+    return requireDashboardAuth(c, next, getEffectiveProfiles(finalConfig.profiles))
+  }
 
   app.use("/v1/*", modelAuth)
   app.use("/messages", modelAuth)

@@ -184,7 +184,7 @@ export const landingHtml = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-<div id="mhHeader"></div>
+` + profileBarHtml + `
 <div class="container" id="mainContent">
   <div id="loginScreen" class="hidden">
     <div class="login-box">
@@ -207,7 +207,6 @@ export const landingHtml = `<!DOCTYPE html>
   </div>
 </div>
 
-${profileBarHtml}
 ${reorderLiveRegionHtml}
 
 <script>

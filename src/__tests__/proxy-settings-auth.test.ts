@@ -47,10 +47,26 @@ describe("Per-profile Token auth — /settings/api/* and all dashboard routes", 
     expect(res.status).toBe(401)
   })
 
-  it("rejects GET /settings (HTML dashboard) without Token", async () => {
+  it("serves GET /settings (HTML shell) without Token — data stays gated", async () => {
     const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
     const res = await app.fetch(new Request("http://localhost/settings"))
-    expect(res.status).toBe(401)
+    // The shell must load so browser navigation works once the tab holds a
+    // Token (sessionStorage → x-api-key); gating it 401s the page itself with
+    // raw authentication_error JSON before any JS can attach the key.
+    expect(res.status).toBe(200)
+    expect(res.headers.get("content-type")).toContain("text/html")
+  })
+
+  it("serves every HTML shell without Token while its JSON stays gated", async () => {
+    const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
+    for (const shell of ["/telemetry", "/profiles", "/providers", "/settings", "/plugins", "/telemetry/icon.svg"]) {
+      const res = await app.fetch(new Request(`http://localhost${shell}`))
+      expect(res.status).toBe(200)
+    }
+    for (const gated of ["/telemetry/summary", "/profiles/list", "/providers/view", "/settings/api/features", "/plugins/list"]) {
+      const res = await app.fetch(new Request(`http://localhost${gated}`))
+      expect(res.status).toBe(401)
+    }
   })
 
   it("accepts GET /settings/api/features with matching Token", async () => {
@@ -77,8 +93,21 @@ describe("Per-profile Token auth — /settings/api/* and all dashboard routes", 
 // ---------------------------------------------------------------------------
 describe("auth audit: every registered prefix is protected when profiles have accessKeys", () => {
   // Routes that are intentionally public. They serve read-only,
-  // non-sensitive content (landing page; auth status; the two probes).
-  const PUBLIC_PREFIXES = new Set(["/", "/health", "/livez", "/readyz"])
+  // non-sensitive content (landing page; auth status; the two probes), plus
+  // the full-page HTML shells: public so browser navigation works once the
+  // tab holds a Token, with every data endpoint behind them still gated.
+  const PUBLIC_PREFIXES = new Set([
+    "/",
+    "/health",
+    "/livez",
+    "/readyz",
+    "/telemetry",
+    "/telemetry/icon.svg",
+    "/profiles",
+    "/providers",
+    "/settings",
+    "/plugins",
+  ])
 
   it("rejects unauthenticated requests to every non-public route prefix", async () => {
     const token = mintToken()

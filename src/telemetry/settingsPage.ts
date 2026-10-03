@@ -243,6 +243,10 @@ let selectedAdapter = null;
 async function loadConfig() {
   const apiFetch = window.meridianApiFetch || fetch;
   const res = await apiFetch('/settings/api/features');
+  if (res.status === 401) {
+    document.getElementById('adapters').innerHTML = '<div style="color:var(--muted);padding:24px;text-align:center">Dashboard locked — sign in from the <a href="/" style="color:var(--accent)">home page</a>, then reload.</div>';
+    return;
+  }
   currentConfig = await res.json();
   render();
 }
@@ -389,6 +393,7 @@ function fmtRate(v) { return String(Math.round(v * 10000) / 10000); }
 async function loadPricing() {
   const apiFetch = window.meridianApiFetch || fetch;
   const res = await apiFetch('/settings/api/pricing');
+  if (res.status === 401) return;
   pricingData = await res.json();
   renderPricing();
 }
@@ -506,6 +511,10 @@ async function addPricingModel() {
 async function loadRouting() {
   const apiFetch = window.meridianApiFetch || fetch;
   const res = await apiFetch('/settings/api/routing');
+  if (res.status === 401) {
+    document.getElementById('routing-body').innerHTML = '<div style="color:var(--muted);padding:12px;text-align:center">Dashboard locked — sign in from the <a href="/" style="color:var(--accent)">home page</a>.</div>';
+    return;
+  }
   const cfg = await res.json();
   const el = document.getElementById('routing-body');
   const envNote = (on) => on ? ' <span style="font-size:11px;color:var(--yellow)">(env override active — setting saved but env wins)</span>' : '';
@@ -573,6 +582,10 @@ function telemetryRow(label, control, effective, note) {
 async function loadTelemetry() {
   const apiFetch = window.meridianApiFetch || fetch;
   const res = await apiFetch('/settings/api/telemetry');
+  if (res.status === 401) {
+    document.getElementById('telemetry-body').innerHTML = '<div style="color:var(--muted);padding:12px;text-align:center">Dashboard locked — sign in from the <a href="/" style="color:var(--accent)">home page</a>.</div>';
+    return;
+  }
   const cfg = await res.json();
   const el = document.getElementById('telemetry-body');
   const live = cfg.effective || {};

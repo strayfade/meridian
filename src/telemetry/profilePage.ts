@@ -344,7 +344,16 @@ async function refresh() {
       apiFetch('/v1/usage/quota/all').catch(function () { return null; }),
       apiFetch('/settings/api/routing').catch(function () { return null; }),
     ]);
-    var profiles = await profilesRes.json();
+    var profiles = null;
+    if (profilesRes.status === 401) {
+      document.getElementById('content').innerHTML = '<div class="empty-state">'
+        + '<h2>Dashboard locked</h2>'
+        + '<p style="margin-top:8px">Sign in from the <a href="/" style="color:var(--accent)">home page</a>, then reload.</p>'
+        + '</div>';
+      return;
+    }
+    try { profiles = await profilesRes.json(); } catch (_) { profiles = null; }
+    if (!profiles || profiles.type === 'error') { throw new Error('load failed'); }
     var quota = null;
     if (quotaRes && quotaRes.ok) {
       try { quota = await quotaRes.json(); } catch (_) { quota = null; }

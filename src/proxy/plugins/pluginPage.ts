@@ -162,7 +162,13 @@ function esc(s) {
 
 async function loadPlugins() {
   try {
-    var res = await fetch('/plugins/list');
+    const apiFetch = window.meridianApiFetch || fetch;
+    var res = await apiFetch('/plugins/list');
+    if (res.status === 401) {
+      document.getElementById('content').innerHTML =
+        '<div class="empty-state"><h2>Dashboard locked</h2><p>Sign in from the <a href="/" style="color:var(--accent)">home page</a>, then reload.</p></div>';
+      return;
+    }
     var data = await res.json();
     render(data.plugins || []);
   } catch {
@@ -180,7 +186,8 @@ async function reloadPlugins() {
   status.className = 'reload-status';
   status.textContent = '';
   try {
-    var res = await fetch('/plugins/reload', { method: 'POST' });
+    const apiFetch = window.meridianApiFetch || fetch;
+    var res = await apiFetch('/plugins/reload', { method: 'POST' });
     var data = await res.json();
     if (data.success) {
       status.textContent = '\u2713 Reloaded';
