@@ -1,9 +1,12 @@
 /**
- * Per-profile Token authentication middleware.
+ * API key authentication middleware.
  *
- * Replaces MERIDIAN_API_KEY with per-profile accessKey from profiles.json.
- * - Model routes (/v1/*): Token selects its profile (no header needed).
- * - Dashboard/mutation routes: any valid Token grants access.
+ * Two accepted credentials (either grants access):
+ * - Per-profile Token (mrd_...) from profiles.json accessKey.
+ * - Global MERIDIAN_API_KEY (legacy shared secret, still honored).
+ * - Model routes (/v1/*): per-profile Token selects its profile (no header
+ *   needed); the global key grants access without pinning a profile.
+ * - Dashboard/mutation routes: any valid credential grants access.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto"
@@ -13,9 +16,14 @@ import { findProfileByToken, anyProfileHasKey } from "./profileKeys"
 
 const TOKEN_PREFIX = "mrd_"
 
-/** Whether any profile has an accessKey (gate engagement). */
+function getConfiguredKey(): string | undefined {
+  const key = process.env.MERIDIAN_API_KEY
+  return key ? key : undefined
+}
+
+/** Whether any auth gate is engaged (per-profile key or global key). */
 export function tokenAuthEnabled(profiles: ProfileConfig[]): boolean {
-  return anyProfileHasKey(profiles)
+  return anyProfileHasKey(profiles) || Boolean(getConfiguredKey())
 }
 
 /**
@@ -30,10 +38,13 @@ function safeCompare(a: string, b: string): boolean {
 
 /** Shared by Hono and standard-Request runtimes. */
 export function hasValidToken(headers: Headers, profiles: ProfileConfig[]): boolean {
-  if (!anyProfileHasKey(profiles)) return true
+  const configured = getConfiguredKey()
+  if (!anyProfileHasKey(profiles) && !configured) return true
   const authorization = headers.get("authorization")
   const provided = headers.get("x-api-key") || (authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined)
-  if (!provided || !provided.startsWith(TOKEN_PREFIX)) return false
+  if (!provided) return false
+  if (configured && safeCompare(provided, configured)) return true
+  if (!provided.startsWith(TOKEN_PREFIX)) return false
   return findProfileByToken(provided, profiles) !== undefined
 }
 
@@ -62,9 +73,11 @@ export async function requireModelAuth(
   profiles: ProfileConfig[],
   explicitHeader?: string
 ): Promise<Response | void> {
-  if (!anyProfileHasKey(profiles)) return next()
+  const configured = getConfiguredKey()
+  if (!anyProfileHasKey(profiles) && !configured) return next()
 
   const provided = extractToken(c)
+  if (provided && configured && safeCompare(provided, configured)) return next()
   if (!provided || !provided.startsWith(TOKEN_PREFIX)) {
     return c.json({
       type: "error",
@@ -110,9 +123,11 @@ export async function requireDashboardAuth(
   next: Next,
   profiles: ProfileConfig[]
 ): Promise<Response | void> {
-  if (!anyProfileHasKey(profiles)) return next()
+  const configured = getConfiguredKey()
+  if (!anyProfileHasKey(profiles) && !configured) return next()
 
   const provided = extractToken(c)
+  if (provided && configured && safeCompare(provided, configured)) return next()
   if (!provided || !provided.startsWith(TOKEN_PREFIX)) {
     return c.json({
       type: "error",

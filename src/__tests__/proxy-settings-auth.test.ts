@@ -9,13 +9,14 @@
  * auth middleware when at least one profile has an accessKey.
  */
 import { describe, it, expect, beforeAll, afterAll } from "bun:test"
+import type { ProfileConfig } from "../proxy/profiles"
 
 const { mintToken } = await import("../proxy/profileKeys")
 const { createProxyServer } = await import("../proxy/server")
 
 describe("Per-profile Token auth — /settings/api/* and all dashboard routes", () => {
   let token: string
-  let profiles: Array<{ id: string; type: string; accessKey: string }>
+  let profiles: ProfileConfig[]
 
   beforeAll(() => {
     token = mintToken()
@@ -81,7 +82,7 @@ describe("auth audit: every registered prefix is protected when profiles have ac
 
   it("rejects unauthenticated requests to every non-public route prefix", async () => {
     const token = mintToken()
-    const profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+    const profiles: ProfileConfig[] = [{ id: "test", type: "claude-max", accessKey: token }]
     const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
 
     const routes = (app as unknown as { routes: Array<{ method: string; path: string }> }).routes
@@ -106,7 +107,7 @@ describe("auth audit: every registered prefix is protected when profiles have ac
 
   it("model route /v1/messages requires Token", async () => {
     const token = mintToken()
-    const profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+    const profiles: ProfileConfig[] = [{ id: "test", type: "claude-max", accessKey: token }]
     const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
 
     const res = await app.fetch(new Request("http://localhost/v1/messages", {
@@ -120,7 +121,7 @@ describe("auth audit: every registered prefix is protected when profiles have ac
 
   it("model route /v1/messages accepts valid Token from matching profile", async () => {
     const token = mintToken()
-    const profiles = [{ id: "test", type: "claude-max", accessKey: token }]
+    const profiles: ProfileConfig[] = [{ id: "test", type: "claude-max", accessKey: token }]
     const { app } = createProxyServer({ port: 0, host: "127.0.0.1", profiles })
 
     // This will fail with 503 (no real SDK) but should NOT be 401

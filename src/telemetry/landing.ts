@@ -189,7 +189,7 @@ export const landingHtml = `<!DOCTYPE html>
   <div id="loginScreen" class="hidden">
     <div class="login-box">
       <h1>Meridian</h1>
-      <p class="subtitle">Enter a profile Token to access the dashboard</p>
+      <p class="subtitle">Enter a profile Token (mrd_...) or the server MERIDIAN_API_KEY to access the dashboard</p>
       <form id="tokenForm" onsubmit="return false;">
         <div class="token-input-group">
           <label for="tokenInput">Token</label>
@@ -203,22 +203,7 @@ export const landingHtml = `<!DOCTYPE html>
   </div>
 
   <div id="dashboardContent" class="hidden">
-    <section class="intro">
-      <h2>Meridian</h2>
-      <p>Local proxy for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>,
-        <a href="https://github.com/anomalyco/opencode">OpenCode</a> and other agents — connects them to
-        your <a href="https://www.anthropic.com/claude/pricing">Claude Max/Team</a> subscription via the Agent SDK.</p>
-      <p class="intro-meta" id="introMeta"></p>
-    </section>
-
-    <div id="accountsSection"></div>
-
-    <div class="section">
-      <div class="section-head"><div class="section-title">Last 24 Hours</div></div>
-      <div class="strip" id="trafficStrip"></div>
-    </div>
-
-    <div class="footer">Meridian · <a href="https://github.com/rynfar/meridian">GitHub</a> · Built on the <a href="https://github.com/anthropics/claude-agent-sdk-typescript">Claude Agent SDK</a></div>
+    <div id="content"><div style="color:var(--muted);padding:40px;text-align:center">Loading…</div></div>
   </div>
 </div>
 
@@ -325,8 +310,10 @@ ${reorderLiveRegionHtml}
   var meridianReorder = { adopt: function(){}, focusAnchor: function(){ return null; }, restoreFocus: function(){} };
 
   /* ==== Initial bootstrap ==== */
-  // Check for stored Token on load; if present, validate and show dashboard.
-  // If validation fails, clear and show login. If no Token, show login.
+  // Check for stored key on load; if present, validate and show dashboard.
+  // If validation fails, clear and fall through. With no stored key, probe
+  // /profiles/list unauthenticated: when auth is disabled (no accessKey and
+  // no MERIDIAN_API_KEY) it answers 200 and the dashboard opens directly.
   async function bootstrap() {
     var token = storedToken();
     if (token) {
@@ -337,9 +324,18 @@ ${reorderLiveRegionHtml}
         if (window.meridianHeaderRefresh) window.meridianHeaderRefresh();
         return;
       }
-      // Invalid/expired Token — clear and fall through to login
+      // Invalid/expired key — clear and fall through to login
       setStoredToken('');
     }
+    try {
+      var probe = await fetch('/profiles/list');
+      if (probe.ok) {
+        showDashboard();
+        refresh();
+        if (window.meridianHeaderRefresh) window.meridianHeaderRefresh();
+        return;
+      }
+    } catch (_) { /* no probe — fall through to login */ }
     showLoginScreen();
   }
 
